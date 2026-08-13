@@ -1,12 +1,19 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { createClient, Session } from "@supabase/supabase-js";
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!
-);
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!;
+
+type Session = {
+  access_token: string;
+  refresh_token: string;
+  expires_in: number;
+  user: {
+    id: string;
+    email?: string;
+  };
+};
 
 export default function Home() {
   const [session, setSession] = useState<Session | null>(null);
@@ -17,43 +24,65 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session);
-    });
-
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, newSession) => {
-      setSession(newSession);
-    });
-
-    return () => subscription.unsubscribe();
+    const saved = localStorage.getItem("ofa_session");
+    if (saved) {
+      try {
+        setSession(JSON.parse(saved));
+      } catch {
+        localStorage.removeItem("ofa_session");
+      }
+    }
   }, []);
 
   async function login() {
     setLoading(true);
     setStatus("Logger inn...");
 
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
+    try {
+      const response = await fetch(
+        `${supabaseUrl}/auth/v1/token?grant_type=password`,
+        {
+          method: "POST",
+          headers: {
+            apikey: supabaseKey,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            email,
+            password,
+          }),
+        }
+      );
 
-    if (error) {
-      setStatus(`Innlogging feilet: ${error.message}`);
-    } else {
+      const data = await response.json();
+
+      if (!response.ok) {
+        setStatus(`Innlogging feilet: ${data.error_description ?? data.msg ?? "ukjent feil"}`);
+        return;
+      }
+
+      localStorage.setItem("ofa_session", JSON.stringify(data));
+      setSession(data);
       setStatus("✅ Innlogget");
+    } catch {
+      setStatus("Innlogging feilet.");
+    } finally {
+      setLoading(false);
     }
-
-    setLoading(false);
   }
 
-  async function logout() {
-    await supabase.auth.signOut();
+  function logout() {
+    localStorage.removeItem("ofa_session");
+    setSession(null);
     setStatus("Logget ut");
   }
 
   async function remember() {
+    if (!session) {
+      setStatus("Du må være innlogget.");
+      return;
+    }
+
     if (!memoryText.trim()) {
       setStatus("Skriv noe OFA skal huske først.");
       return;
@@ -62,34 +91,43 @@ export default function Home() {
     setLoading(true);
     setStatus("Lagrer og strukturerer...");
 
-    const { data, error } = await supabase.functions.invoke("ofa-remember", {
-      body: {
-        text: memoryText.trim(),
-      },
-    });
+    try {
+      const response = await fetch(
+        `${supabaseUrl}/functions/v1/ofa-remember`,
+        {
+          method: "POST",
+          headers: {
+            apikey: supabaseKey,
+            Authorization: `Bearer ${session.access_token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            text: memoryText.trim(),
+          }),
+        }
+      );
 
-    if (error) {
-      setStatus(`Feil: ${error.message}`);
+      const data = await response.json();
+
+      if (!response.ok || !data.ok) {
+        setStatus(`Feil: ${data.error ?? `HTTP ${response.status}`}`);
+        return;
+      }
+
+      setStatus(
+        `✅ Lagret\n\n${data.extracted?.title ?? ""}\n${data.extracted?.summary ?? ""}`
+      );
+
+      setMemoryText("");
+    } catch {
+      setStatus("Kunne ikke kontakte OFA-backend.");
+    } finally {
       setLoading(false);
-      return;
     }
-
-    if (!data?.ok) {
-      setStatus(`Feil: ${data?.error ?? "Ukjent feil"}`);
-      setLoading(false);
-      return;
-    }
-
-    setStatus(
-      `✅ Lagret\n\n${data.extracted?.title ?? ""}\n${data.extracted?.summary ?? ""}`
-    );
-
-    setMemoryText("");
-    setLoading(false);
   }
 
   return (
-    <main className="min-h-screen bg-zinc-950 text-white p-6">
+    <main className="min-h-screen bg-zinc-950 p-6 text-white">
       <div className="mx-auto max-w-2xl space-y-6 py-10">
         <div>
           <h1 className="text-4xl font-bold">Open Farm Assistant</h1>
@@ -97,7 +135,7 @@ export default function Home() {
         </div>
 
         {!session ? (
-          <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-5 space-y-4">
+          <div className="space-y-4 rounded-2xl border border-zinc-800 bg-zinc-900 p-5">
             <h2 className="text-xl font-semibold">Logg inn</h2>
 
             <input
@@ -125,7 +163,7 @@ export default function Home() {
             </button>
           </div>
         ) : (
-          <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-5 space-y-4">
+          <div className="space-y-4 rounded-2xl border border-zinc-800 bg-zinc-900 p-5">
             <div className="flex items-center justify-between gap-4">
               <div>
                 <div className="text-sm text-zinc-400">Innlogget som</div>
@@ -140,18 +178,12 @@ export default function Home() {
               </button>
             </div>
 
-            <div>
-              <label className="mb-2 block text-sm text-zinc-400">
-                Hva skal OFA huske?
-              </label>
-
-              <textarea
-                className="min-h-40 w-full rounded-xl border border-zinc-700 bg-zinc-950 p-3"
-                placeholder="Eksempel: Byttet servo-olje på Navara i dag, brukte 2,5 liter ATF."
-                value={memoryText}
-                onChange={(e) => setMemoryText(e.target.value)}
-              />
-            </div>
+            <textarea
+              className="min-h-40 w-full rounded-xl border border-zinc-700 bg-zinc-950 p-3"
+              placeholder="Hva skal OFA huske?"
+              value={memoryText}
+              onChange={(e) => setMemoryText(e.target.value)}
+            />
 
             <button
               className="w-full rounded-xl bg-amber-400 p-3 font-bold text-black disabled:opacity-50"

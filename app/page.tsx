@@ -24,8 +24,9 @@ export default function Home() {
   const [note, setNote] = useState("");
   const [tab, setTab] = useState<TabName>("history");
   const [busy, setBusy] = useState(false);
-  const [loading, setLoading] = useState(false);
+  const [pendingLoads, setPendingLoads] = useState(0);
   const [message, setMessage] = useState("");
+  const loading = pendingLoads > 0;
 
   useEffect(() => {
     const saved = localStorage.getItem(SESSION_KEY);
@@ -100,7 +101,7 @@ export default function Home() {
   }
 
   async function loadEntities(current: Session) {
-    setLoading(true);
+    setPendingLoads((count) => count + 1);
     try {
       const params = new URLSearchParams({ select: "id,entity_type,name,description,metadata", order: "created_at.asc" });
       const { response } = await authFetch(current, `${supabaseUrl}/rest/v1/ofa_entities?${params.toString()}`);
@@ -114,11 +115,11 @@ export default function Home() {
         setTab(initial.entity_type === "project" ? "overview" : "history");
       }
     } catch (err) { setMessage(`Feil: ${err instanceof Error ? err.message : String(err)}`); }
-    finally { setLoading(false); }
+    finally { setPendingLoads((count) => Math.max(0, count - 1)); }
   }
 
   async function loadTimeline(current: Session, entityId: string) {
-    setLoading(true);
+    setPendingLoads((count) => count + 1);
     try {
       const linkParams = new URLSearchParams({ select: "memory_id", entity_id: `eq.${entityId}` });
       const { response: linkRes, session: activeSession } = await authFetch(current, `${supabaseUrl}/rest/v1/ofa_memory_entities?${linkParams.toString()}`);
@@ -151,11 +152,11 @@ export default function Home() {
       }
       setTimeline(memories.map((m) => ({ ...m, attachments: map.get(m.id) ?? [] })));
     } catch (err) { setMessage(`Feil: ${err instanceof Error ? err.message : String(err)}`); }
-    finally { setLoading(false); }
+    finally { setPendingLoads((count) => Math.max(0, count - 1)); }
   }
 
   async function loadProjectDashboard(current: Session, entityId: string) {
-    setLoading(true);
+    setPendingLoads((count) => count + 1);
     try {
       const params = new URLSearchParams({
         select: "project_entity_id,project_name,memory_id,memory_type,title,content,status,importance,occurred_at,recorded_at,metadata,verification_status,workflow_state,blocked_by,dashboard_section,section_order",
@@ -169,7 +170,7 @@ export default function Home() {
     } catch (err) {
       setDashboardItems([]);
       setMessage(`Feil: ${err instanceof Error ? err.message : String(err)}`);
-    } finally { setLoading(false); }
+    } finally { setPendingLoads((count) => Math.max(0, count - 1)); }
   }
 
   async function upload(e: FormEvent) {

@@ -1,12 +1,11 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import { ProjectDashboard } from "./project-dashboard";
+import type { Attachment, Entity, Memory, ProjectDashboardItem, TimelineItem } from "./ofa-types";
 
 type Session = { access_token: string; refresh_token: string; user: { id: string; email?: string } };
-type Entity = { id: string; entity_type: string; name: string; description: string | null; metadata: Record<string, unknown> };
-type Memory = { id: string; occurred_at: string | null; recorded_at: string; memory_type: string; title: string; content: string; importance: number; status: string; source: string };
-type Attachment = { id: string; memory_id: string; attachment_type: string; storage_path: string | null; original_name: string | null; mime_type: string | null };
-type TimelineItem = Memory & { attachments: Array<Attachment & { objectUrl?: string }> };
+type TabName = "overview" | "history" | "images" | "upload";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!;
@@ -19,11 +18,11 @@ export default function Home() {
   const [entities, setEntities] = useState<Entity[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [timeline, setTimeline] = useState<TimelineItem[]>([]);
+  const [dashboardItems, setDashboardItems] = useState<ProjectDashboardItem[]>([]);
   const [file, setFile] = useState<File | null>(null);
-  const [preview, setPreview] = useState<string | null>(null);
   const [title, setTitle] = useState("");
   const [note, setNote] = useState("");
-  const [tab, setTab] = useState<"history" | "images" | "upload">("history");
+  const [tab, setTab] = useState<TabName>("history");
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
@@ -31,18 +30,24 @@ export default function Home() {
   useEffect(() => {
     const saved = localStorage.getItem(SESSION_KEY);
     if (!saved) return;
-    try { setSession(JSON.parse(saved)); } catch { localStorage.removeItem(SESSION_KEY); }
+    try {
+      const restored = JSON.parse(saved) as Session;
+      queueMicrotask(() => setSession(restored));
+    } catch { localStorage.removeItem(SESSION_KEY); }
   }, []);
 
   useEffect(() => { if (session) void loadEntities(session); }, [session]);
-  useEffect(() => { if (session && selectedId) void loadTimeline(session, selectedId); }, [selectedId]);
-
   useEffect(() => {
-    if (!file || !file.type.startsWith("image/")) { setPreview(null); return; }
-    const url = URL.createObjectURL(file);
-    setPreview(url);
-    return () => URL.revokeObjectURL(url);
-  }, [file]);
+    if (!session || !selectedId) return;
+    const entity = entities.find((item) => item.id === selectedId);
+    void loadTimeline(session, selectedId);
+    if (entity?.entity_type === "project") void loadProjectDashboard(session, selectedId);
+  }, [selectedId, entities]);
+
+  const preview = useMemo(() => file?.type.startsWith("image/") ? URL.createObjectURL(file) : null, [file]);
+  useEffect(() => {
+    return () => { if (preview) URL.revokeObjectURL(preview); };
+  }, [preview]);
 
   const selected = entities.find((e) => e.id === selectedId) ?? null;
   const imageItems = useMemo(() => timeline.filter((m) => m.attachments.some((a) => a.attachment_type === "image" && a.objectUrl)), [timeline]);
@@ -91,7 +96,7 @@ export default function Home() {
   }
 
   function logout() {
-    revokeUrls(); localStorage.removeItem(SESSION_KEY); setSession(null); setEntities([]); setSelectedId(""); setTimeline([]);
+    revokeUrls(); localStorage.removeItem(SESSION_KEY); setSession(null); setEntities([]); setSelectedId(""); setTimeline([]); setDashboardItems([]);
   }
 
   async function loadEntities(current: Session) {
@@ -104,7 +109,9 @@ export default function Home() {
       setEntities(data);
       if (!selectedId && data.length) {
         const navara = data.find((e) => String(e.metadata?.alias || "") === "Navara");
-        setSelectedId((navara ?? data[0]).id);
+        const initial = navara ?? data[0];
+        setSelectedId(initial.id);
+        setTab(initial.entity_type === "project" ? "overview" : "history");
       }
     } catch (err) { setMessage(`Feil: ${err instanceof Error ? err.message : String(err)}`); }
     finally { setLoading(false); }
@@ -147,6 +154,24 @@ export default function Home() {
     finally { setLoading(false); }
   }
 
+  async function loadProjectDashboard(current: Session, entityId: string) {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams({
+        select: "project_entity_id,project_name,memory_id,memory_type,title,content,status,importance,occurred_at,recorded_at,metadata,verification_status,workflow_state,blocked_by,dashboard_section,section_order",
+        project_entity_id: `eq.${entityId}`,
+        order: "section_order.asc.nullslast,importance.desc.nullslast,occurred_at.desc.nullslast,recorded_at.desc",
+      });
+      const { response } = await authFetch(current, `${supabaseUrl}/rest/v1/ofa_project_dashboard_items?${params.toString()}`);
+      const data: ProjectDashboardItem[] = await response.json();
+      if (!response.ok) throw new Error("Kunne ikke lese prosjektoversikten");
+      setDashboardItems(data);
+    } catch (err) {
+      setDashboardItems([]);
+      setMessage(`Feil: ${err instanceof Error ? err.message : String(err)}`);
+    } finally { setLoading(false); }
+  }
+
   async function upload(e: FormEvent) {
     e.preventDefault();
     if (!session || !selected || !file) return;
@@ -160,7 +185,7 @@ export default function Home() {
       const { response, session: activeSession } = await authFetch(session, `${supabaseUrl}/functions/v1/ofa-upload`, { method: "POST", body: form });
       const data = await response.json();
       if (!response.ok) throw new Error(data?.error || `HTTP ${response.status}`);
-      setFile(null); setPreview(null); setTitle(""); setNote(""); setMessage("✅ Lagret i OFA");
+      setFile(null); setTitle(""); setNote(""); setMessage("✅ Lagret i OFA");
       await loadTimeline(activeSession, selected.id); setTab("images");
     } catch (err) { setMessage(`Feil: ${err instanceof Error ? err.message : String(err)}`); }
     finally { setBusy(false); }
@@ -184,7 +209,7 @@ export default function Home() {
         <div style={entityStripStyle}>
           {entities.map((entity) => {
             const active = entity.id === selectedId;
-            return <button key={entity.id} onClick={() => { setSelectedId(entity.id); setTab("history"); setMessage(""); }} style={{ ...entityButtonStyle, border: active ? "1px solid #888" : "1px solid #2c2c2c", background: active ? "#262626" : "#111" }}>
+            return <button key={entity.id} onClick={() => { setSelectedId(entity.id); setTab(entity.entity_type === "project" ? "overview" : "history"); setDashboardItems([]); setMessage(""); }} style={{ ...entityButtonStyle, border: active ? "1px solid #888" : "1px solid #2c2c2c", background: active ? "#262626" : "#111" }}>
               <div style={{ fontSize: 12, color: "#9ca3af" }}>{entityTypeLabel(entity.entity_type)}</div>
               <div style={{ fontWeight: 800, fontSize: 16 }}>{String(entity.metadata?.alias || entity.name)}</div>
             </button>;
@@ -200,11 +225,23 @@ export default function Home() {
         </div>
 
         <div style={statsGridStyle}><Stat label="Historikk" value={timeline.length} /><Stat label="Bilder" value={imageItems.length} /><Stat label="Oppgaver" value={activeTasks.length} /></div>
-        <div style={tabsStyle}><Tab active={tab === "history"} onClick={() => setTab("history")}>Historikk</Tab><Tab active={tab === "images"} onClick={() => setTab("images")}>Bilder</Tab><Tab active={tab === "upload"} onClick={() => setTab("upload")}>+ Nytt</Tab></div>
+        <div style={tabsStyle}>
+          {selected.entity_type === "project" && <Tab active={tab === "overview"} onClick={() => setTab("overview")}>Oversikt</Tab>}
+          <Tab active={tab === "history"} onClick={() => setTab("history")}>Tidslinje</Tab>
+          <Tab active={tab === "images"} onClick={() => setTab("images")}>Bilder</Tab>
+          <Tab active={tab === "upload"} onClick={() => setTab("upload")}>+ Nytt</Tab>
+        </div>
         {message && <Status message={message} />}
 
+        {selected.entity_type === "project" && tab === "overview" && <ProjectDashboard
+          project={selected}
+          items={dashboardItems}
+          loading={loading}
+          onRefresh={() => void loadProjectDashboard(session, selected.id)}
+        />}
+
         {tab === "history" && <section>
-          <div style={sectionHeaderStyle}><h2 style={{ margin: 0 }}>Historikk</h2><button onClick={() => void loadTimeline(session, selected.id)} disabled={loading} style={secondaryButtonStyle}>{loading ? "Laster…" : "Oppdater"}</button></div>
+          <div style={sectionHeaderStyle}><h2 style={{ margin: 0 }}>{selected.entity_type === "project" ? "Komplett tidslinje" : "Historikk"}</h2><button onClick={() => void loadTimeline(session, selected.id)} disabled={loading} style={secondaryButtonStyle}>{loading ? "Laster…" : "Oppdater"}</button></div>
           {!loading && timeline.length === 0 && <Empty text="Ingen historikk på denne ennå." />}
           <div style={{ display: "grid", gap: 12 }}>{timeline.map((item) => <article key={item.id} style={timelineCardStyle}>
             <div style={timelineTopStyle}><span style={typeBadgeStyle}>{typeLabel(item.memory_type)}</span><span style={{ color: "#8b8b8b", fontSize: 13 }}>{formatDate(item.occurred_at || item.recorded_at)}</span></div>

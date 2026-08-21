@@ -3,7 +3,7 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { MaintenanceView } from "./maintenance-view";
 import { ProjectDashboard } from "./project-dashboard";
-import type { Attachment, Entity, MaintenanceItem, Memory, ProjectDashboardItem, TimelineItem } from "./ofa-types";
+import type { Attachment, Entity, MaintenanceItem, MaintenancePlanInput, Memory, ProjectDashboardItem, TimelineItem } from "./ofa-types";
 
 type Session = { access_token: string; refresh_token: string; user: { id: string; email?: string } };
 type TabName = "overview" | "maintenance" | "history" | "images" | "upload";
@@ -26,6 +26,7 @@ export default function Home() {
   const [note, setNote] = useState("");
   const [tab, setTab] = useState<TabName>("history");
   const [busy, setBusy] = useState(false);
+  const [maintenanceSaving, setMaintenanceSaving] = useState(false);
   const [pendingLoads, setPendingLoads] = useState(0);
   const [message, setMessage] = useState("");
   const loading = pendingLoads > 0;
@@ -184,14 +185,56 @@ export default function Home() {
         entity_id: `eq.${entityId}`,
         order: "name.asc",
       });
-      const { response } = await authFetch(current, `${supabaseUrl}/rest/v1/ofa_maintenance_dashboard_items?${params.toString()}`);
+      const { response, session: activeSession } = await authFetch(current, `${supabaseUrl}/rest/v1/ofa_maintenance_dashboard_items?${params.toString()}`);
       const data: MaintenanceItem[] = await response.json();
       if (!response.ok) throw new Error("Kunne ikke lese vedlikeholdsplanen");
-      setMaintenanceItems(data);
+      const detailParams = new URLSearchParams({ select: "id,description", entity_id: `eq.${entityId}`, active: "eq.true" });
+      const { response: detailResponse } = await authFetch(activeSession, `${supabaseUrl}/rest/v1/ofa_maintenance_plans?${detailParams.toString()}`);
+      const details: Array<{ id: string; description: string | null }> = await detailResponse.json();
+      if (!detailResponse.ok) throw new Error("Kunne ikke lese vedlikeholdsdetaljer");
+      const descriptions = new Map(details.map((item) => [item.id, item.description]));
+      setMaintenanceItems(data.map((item) => ({ ...item, description: descriptions.get(item.id) ?? null })));
     } catch (err) {
       setMaintenanceItems([]);
       setMessage(`Feil: ${err instanceof Error ? err.message : String(err)}`);
     } finally { setPendingLoads((count) => Math.max(0, count - 1)); }
+  }
+
+  async function saveMaintenance(id: string | null, input: MaintenancePlanInput) {
+    if (!session || !selected) return false;
+    setMaintenanceSaving(true); setMessage("");
+    try {
+      const body = id ? input : { ...input, entity_id: selected.id };
+      const url = id
+        ? `${supabaseUrl}/rest/v1/ofa_maintenance_plans?id=eq.${encodeURIComponent(id)}`
+        : `${supabaseUrl}/rest/v1/ofa_maintenance_plans`;
+      const { response, session: activeSession } = await authFetch(session, url, {
+        method: id ? "PATCH" : "POST",
+        headers: { "Content-Type": "application/json", Prefer: "return=minimal" },
+        body: JSON.stringify(body),
+      });
+      if (!response.ok) throw new Error("Kunne ikke lagre vedlikeholdspunktet");
+      setMessage(id ? "Vedlikeholdspunktet er oppdatert." : "Vedlikeholdspunktet er opprettet.");
+      await loadMaintenance(activeSession, selected.id);
+      return true;
+    } catch (err) { setMessage(`Feil: ${err instanceof Error ? err.message : String(err)}`); return false; }
+    finally { setMaintenanceSaving(false); }
+  }
+
+  async function deactivateMaintenance(item: MaintenanceItem) {
+    if (!session || !selected || !window.confirm(`Deaktivere «${item.name}»? Historikken blir ikke slettet.`)) return;
+    setMaintenanceSaving(true); setMessage("");
+    try {
+      const { response, session: activeSession } = await authFetch(session, `${supabaseUrl}/rest/v1/ofa_maintenance_plans?id=eq.${encodeURIComponent(item.id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Prefer: "return=minimal" },
+        body: JSON.stringify({ active: false }),
+      });
+      if (!response.ok) throw new Error("Kunne ikke deaktivere vedlikeholdspunktet");
+      setMessage("Vedlikeholdspunktet er deaktivert. Historikken er beholdt.");
+      await loadMaintenance(activeSession, selected.id);
+    } catch (err) { setMessage(`Feil: ${err instanceof Error ? err.message : String(err)}`); }
+    finally { setMaintenanceSaving(false); }
   }
 
   async function upload(e: FormEvent) {
@@ -265,8 +308,12 @@ export default function Home() {
 
         {supportsMaintenance(selected) && tab === "maintenance" && <MaintenanceView
           items={maintenanceItems}
+          history={timeline}
           loading={loading}
+          saving={maintenanceSaving}
           onRefresh={() => void loadMaintenance(session, selected.id)}
+          onSave={saveMaintenance}
+          onDeactivate={deactivateMaintenance}
         />}
 
         {tab === "history" && <section>

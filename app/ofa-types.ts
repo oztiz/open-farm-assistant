@@ -54,6 +54,7 @@ export type MaintenanceItem = {
   id: string;
   entity_id: string;
   name: string;
+  description: string | null;
   last_service_memory_id: string | null;
   last_performed_at: string | null;
   last_odometer_km: number | null;
@@ -68,4 +69,13 @@ export type MaintenanceItem = {
   next_due_date: string | null;
   maintenance_status: "ok" | "due_soon" | "overdue";
   metadata: Record<string, unknown>;
+};
+
+export type MaintenancePlanInput = {
+  name: string;
+  description: string | null;
+  interval_km: number | null;
+  interval_hours: number | null;
+  interval_days: number | null;
+  last_service_memory_id: string | null;
 };

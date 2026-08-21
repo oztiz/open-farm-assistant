@@ -1,0 +1,109 @@
+create or replace function public.ofa_upsert_maintenance_service_memory(
+  p_entity_id uuid,
+  p_memory_id uuid,
+  p_plan_name text,
+  p_performed_at timestamptz,
+  p_odometer_km bigint,
+  p_engine_hours numeric
+)
+returns uuid
+language plpgsql
+security invoker
+set search_path = ''
+as $$
+declare
+  caller_id uuid := (select auth.uid());
+  result_id uuid;
+begin
+  if caller_id is null then
+    raise exception 'Authentication required';
+  end if;
+
+  if not exists (
+    select 1
+    from public.ofa_entities entity
+    where entity.id = p_entity_id
+      and entity.metadata ->> 'user_id' = caller_id::text
+  ) then
+    raise exception 'Entity not found or not owned by caller';
+  end if;
+
+  if p_odometer_km is not null and p_odometer_km < 0 then
+    raise exception 'Odometer must be nonnegative';
+  end if;
+  if p_engine_hours is not null and p_engine_hours < 0 then
+    raise exception 'Engine hours must be nonnegative';
+  end if;
+
+  if p_memory_id is not null then
+    if not exists (
+      select 1
+      from public.ofa_memories memory
+      join public.ofa_memory_entities link on link.memory_id = memory.id
+      where memory.id = p_memory_id
+        and link.entity_id = p_entity_id
+        and memory.metadata ->> 'user_id' = caller_id::text
+    ) then
+      raise exception 'History item not found, not linked, or not owned by caller';
+    end if;
+
+    update public.ofa_memories
+    set
+      occurred_at = p_performed_at,
+      odometer_km = p_odometer_km,
+      engine_hours = p_engine_hours
+    where id = p_memory_id;
+
+    return p_memory_id;
+  end if;
+
+  if p_performed_at is null then
+    raise exception 'Performed date is required for a new service history item';
+  end if;
+
+  insert into public.ofa_memories (
+    occurred_at,
+    memory_type,
+    title,
+    content,
+    source,
+    importance,
+    status,
+    odometer_km,
+    engine_hours,
+    metadata
+  ) values (
+    p_performed_at,
+    'service',
+    trim(p_plan_name) || ' utført',
+    'Utførelse registrert fra vedlikeholdsplanen.',
+    'ofa_app',
+    3,
+    'active',
+    p_odometer_km,
+    p_engine_hours,
+    jsonb_build_object('user_id', caller_id, 'created_from', 'maintenance_plan')
+  )
+  returning id into result_id;
+
+  insert into public.ofa_memory_entities (memory_id, entity_id, relation)
+  values (result_id, p_entity_id, 'about');
+
+  return result_id;
+end;
+$$;
+
+update public.ofa_maintenance_plans plan
+set
+  last_service_memory_id = null,
+  updated_at = now()
+from public.ofa_entities entity, public.ofa_memories memory
+where plan.entity_id = entity.id
+  and plan.last_service_memory_id = memory.id
+  and entity.name = 'New Holland TM155 (2004)'
+  and plan.name = 'Stor service'
+  and memory.id = '1b4beca6-ba37-420e-85ce-e54ce8c9a2a7'::uuid
+  and memory.memory_type = 'decision'
+  and memory.title = 'Transmisjons-/hydraulikkolje – Castrol Transmax Agri MP 15W-40 vurdert'
+  and memory.odometer_km is null
+  and memory.engine_hours is null;

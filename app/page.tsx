@@ -1,11 +1,12 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import { MaintenanceView } from "./maintenance-view";
 import { ProjectDashboard } from "./project-dashboard";
-import type { Attachment, Entity, Memory, ProjectDashboardItem, TimelineItem } from "./ofa-types";
+import type { Attachment, Entity, MaintenanceItem, Memory, ProjectDashboardItem, TimelineItem } from "./ofa-types";
 
 type Session = { access_token: string; refresh_token: string; user: { id: string; email?: string } };
-type TabName = "overview" | "history" | "images" | "upload";
+type TabName = "overview" | "maintenance" | "history" | "images" | "upload";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!;
@@ -19,6 +20,7 @@ export default function Home() {
   const [selectedId, setSelectedId] = useState("");
   const [timeline, setTimeline] = useState<TimelineItem[]>([]);
   const [dashboardItems, setDashboardItems] = useState<ProjectDashboardItem[]>([]);
+  const [maintenanceItems, setMaintenanceItems] = useState<MaintenanceItem[]>([]);
   const [file, setFile] = useState<File | null>(null);
   const [title, setTitle] = useState("");
   const [note, setNote] = useState("");
@@ -43,6 +45,7 @@ export default function Home() {
     const entity = entities.find((item) => item.id === selectedId);
     void loadTimeline(session, selectedId);
     if (entity?.entity_type === "project") void loadProjectDashboard(session, selectedId);
+    if (entity && supportsMaintenance(entity)) void loadMaintenance(session, selectedId);
   }, [selectedId, entities]);
 
   const preview = useMemo(() => file?.type.startsWith("image/") ? URL.createObjectURL(file) : null, [file]);
@@ -97,7 +100,7 @@ export default function Home() {
   }
 
   function logout() {
-    revokeUrls(); localStorage.removeItem(SESSION_KEY); setSession(null); setEntities([]); setSelectedId(""); setTimeline([]); setDashboardItems([]);
+    revokeUrls(); localStorage.removeItem(SESSION_KEY); setSession(null); setEntities([]); setSelectedId(""); setTimeline([]); setDashboardItems([]); setMaintenanceItems([]);
   }
 
   async function loadEntities(current: Session) {
@@ -173,6 +176,24 @@ export default function Home() {
     } finally { setPendingLoads((count) => Math.max(0, count - 1)); }
   }
 
+  async function loadMaintenance(current: Session, entityId: string) {
+    setPendingLoads((count) => count + 1);
+    try {
+      const params = new URLSearchParams({
+        select: "id,entity_id,name,last_service_memory_id,last_performed_at,last_odometer_km,last_engine_hours,interval_km,interval_hours,interval_days,current_odometer_km,current_engine_hours,next_due_km,next_due_hours,next_due_date,maintenance_status,metadata",
+        entity_id: `eq.${entityId}`,
+        order: "name.asc",
+      });
+      const { response } = await authFetch(current, `${supabaseUrl}/rest/v1/ofa_maintenance_dashboard_items?${params.toString()}`);
+      const data: MaintenanceItem[] = await response.json();
+      if (!response.ok) throw new Error("Kunne ikke lese vedlikeholdsplanen");
+      setMaintenanceItems(data);
+    } catch (err) {
+      setMaintenanceItems([]);
+      setMessage(`Feil: ${err instanceof Error ? err.message : String(err)}`);
+    } finally { setPendingLoads((count) => Math.max(0, count - 1)); }
+  }
+
   async function upload(e: FormEvent) {
     e.preventDefault();
     if (!session || !selected || !file) return;
@@ -210,7 +231,7 @@ export default function Home() {
         <div style={entityStripStyle}>
           {entities.map((entity) => {
             const active = entity.id === selectedId;
-            return <button key={entity.id} onClick={() => { setSelectedId(entity.id); setTab(entity.entity_type === "project" ? "overview" : "history"); setDashboardItems([]); setMessage(""); }} style={{ ...entityButtonStyle, border: active ? "1px solid #888" : "1px solid #2c2c2c", background: active ? "#262626" : "#111" }}>
+            return <button key={entity.id} onClick={() => { setSelectedId(entity.id); setTab(entity.entity_type === "project" ? "overview" : "history"); setDashboardItems([]); setMaintenanceItems([]); setMessage(""); }} style={{ ...entityButtonStyle, border: active ? "1px solid #888" : "1px solid #2c2c2c", background: active ? "#262626" : "#111" }}>
               <div style={{ fontSize: 12, color: "#9ca3af" }}>{entityTypeLabel(entity.entity_type)}</div>
               <div style={{ fontWeight: 800, fontSize: 16 }}>{String(entity.metadata?.alias || entity.name)}</div>
             </button>;
@@ -228,6 +249,7 @@ export default function Home() {
         <div style={statsGridStyle}><Stat label="Historikk" value={timeline.length} /><Stat label="Bilder" value={imageItems.length} /><Stat label="Oppgaver" value={activeTasks.length} /></div>
         <div style={tabsStyle}>
           {selected.entity_type === "project" && <Tab active={tab === "overview"} onClick={() => setTab("overview")}>Oversikt</Tab>}
+          {supportsMaintenance(selected) && <Tab active={tab === "maintenance"} onClick={() => setTab("maintenance")}>Vedlikehold</Tab>}
           <Tab active={tab === "history"} onClick={() => setTab("history")}>Tidslinje</Tab>
           <Tab active={tab === "images"} onClick={() => setTab("images")}>Bilder</Tab>
           <Tab active={tab === "upload"} onClick={() => setTab("upload")}>+ Nytt</Tab>
@@ -239,6 +261,12 @@ export default function Home() {
           items={dashboardItems}
           loading={loading}
           onRefresh={() => void loadProjectDashboard(session, selected.id)}
+        />}
+
+        {supportsMaintenance(selected) && tab === "maintenance" && <MaintenanceView
+          items={maintenanceItems}
+          loading={loading}
+          onRefresh={() => void loadMaintenance(session, selected.id)}
         />}
 
         {tab === "history" && <section>
@@ -278,6 +306,7 @@ function Tab({ active, onClick, children }: { active: boolean; onClick: () => vo
 function Status({ message }: { message: string }) { return <div style={{ margin: "14px 0", padding: 13, borderRadius: 11, background: "#171717" }}>{message}</div>; }
 function Empty({ text }: { text: string }) { return <div style={{ ...cardStyle, color: "#9ca3af" }}>{text}</div>; }
 function entityTypeLabel(type: string) { const labels: Record<string, string> = { vehicle: "Kjøretøy", machine: "Maskin", implement: "Redskap", project: "Prosjekt", field: "Skifte" }; return labels[type] || "Objekt"; }
+function supportsMaintenance(entity: Entity) { return entity.entity_type === "vehicle" || entity.entity_type === "machine"; }
 function typeLabel(type: string) { const labels: Record<string, string> = { image: "Bilde", service: "Service", task: "Oppgave", observation: "Observasjon", purchase: "Innkjøp", measurement: "Måling", event: "Hendelse", note: "Notat", decision: "Beslutning", document: "Dokument" }; return labels[type] || type; }
 function formatDate(value: string) { try { return new Intl.DateTimeFormat("nb-NO", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value)); } catch { return value; } }
 
@@ -293,7 +322,7 @@ const entityButtonStyle: React.CSSProperties = { minWidth: 135, textAlign: "left
 const machineCardStyle: React.CSSProperties = { padding: 18, border: "1px solid #262626", borderRadius: 16, background: "#101010" };
 const statsGridStyle: React.CSSProperties = { display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, margin: "12px 0" };
 const statStyle: React.CSSProperties = { padding: 14, borderRadius: 13, border: "1px solid #262626", background: "#101010" };
-const tabsStyle: React.CSSProperties = { display: "flex", gap: 8, margin: "16px 0 20px" };
+const tabsStyle: React.CSSProperties = { display: "flex", gap: 8, margin: "16px 0 20px", overflowX: "auto", WebkitOverflowScrolling: "touch" };
 const sectionHeaderStyle: React.CSSProperties = { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 12 };
 const timelineCardStyle: React.CSSProperties = { padding: 16, border: "1px solid #262626", borderRadius: 14, background: "#101010" };
 const timelineTopStyle: React.CSSProperties = { display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" };

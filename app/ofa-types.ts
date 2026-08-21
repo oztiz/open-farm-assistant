@@ -49,3 +49,23 @@ export type ProjectDashboardItem = {
   dashboard_section: string | null;
   section_order: number | null;
 };
+
+export type MaintenanceItem = {
+  id: string;
+  entity_id: string;
+  name: string;
+  last_service_memory_id: string | null;
+  last_performed_at: string | null;
+  last_odometer_km: number | null;
+  last_engine_hours: number | null;
+  interval_km: number | null;
+  interval_hours: number | null;
+  interval_days: number | null;
+  current_odometer_km: number | null;
+  current_engine_hours: number | null;
+  next_due_km: number | null;
+  next_due_hours: number | null;
+  next_due_date: string | null;
+  maintenance_status: "ok" | "due_soon" | "overdue";
+  metadata: Record<string, unknown>;
+};

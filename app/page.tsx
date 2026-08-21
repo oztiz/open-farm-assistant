@@ -1,12 +1,12 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import { MaintenanceView } from "./maintenance-view";
+import { ProjectDashboard } from "./project-dashboard";
+import type { Attachment, Entity, MaintenanceItem, MaintenancePlanInput, Memory, ProjectDashboardItem, TimelineItem } from "./ofa-types";
 
 type Session = { access_token: string; refresh_token: string; user: { id: string; email?: string } };
-type Entity = { id: string; entity_type: string; name: string; description: string | null; metadata: Record<string, unknown> };
-type Memory = { id: string; occurred_at: string | null; recorded_at: string; memory_type: string; title: string; content: string; importance: number; status: string; source: string };
-type Attachment = { id: string; memory_id: string; attachment_type: string; storage_path: string | null; original_name: string | null; mime_type: string | null };
-type TimelineItem = Memory & { attachments: Array<Attachment & { objectUrl?: string }> };
+type TabName = "overview" | "maintenance" | "history" | "images" | "upload";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!;
@@ -19,30 +19,40 @@ export default function Home() {
   const [entities, setEntities] = useState<Entity[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [timeline, setTimeline] = useState<TimelineItem[]>([]);
+  const [dashboardItems, setDashboardItems] = useState<ProjectDashboardItem[]>([]);
+  const [maintenanceItems, setMaintenanceItems] = useState<MaintenanceItem[]>([]);
   const [file, setFile] = useState<File | null>(null);
-  const [preview, setPreview] = useState<string | null>(null);
   const [title, setTitle] = useState("");
   const [note, setNote] = useState("");
-  const [tab, setTab] = useState<"history" | "images" | "upload">("history");
+  const [tab, setTab] = useState<TabName>("history");
   const [busy, setBusy] = useState(false);
-  const [loading, setLoading] = useState(false);
+  const [maintenanceSaving, setMaintenanceSaving] = useState(false);
+  const [pendingLoads, setPendingLoads] = useState(0);
   const [message, setMessage] = useState("");
+  const loading = pendingLoads > 0;
 
   useEffect(() => {
     const saved = localStorage.getItem(SESSION_KEY);
     if (!saved) return;
-    try { setSession(JSON.parse(saved)); } catch { localStorage.removeItem(SESSION_KEY); }
+    try {
+      const restored = JSON.parse(saved) as Session;
+      queueMicrotask(() => setSession(restored));
+    } catch { localStorage.removeItem(SESSION_KEY); }
   }, []);
 
   useEffect(() => { if (session) void loadEntities(session); }, [session]);
-  useEffect(() => { if (session && selectedId) void loadTimeline(session, selectedId); }, [selectedId]);
-
   useEffect(() => {
-    if (!file || !file.type.startsWith("image/")) { setPreview(null); return; }
-    const url = URL.createObjectURL(file);
-    setPreview(url);
-    return () => URL.revokeObjectURL(url);
-  }, [file]);
+    if (!session || !selectedId) return;
+    const entity = entities.find((item) => item.id === selectedId);
+    void loadTimeline(session, selectedId);
+    if (entity?.entity_type === "project") void loadProjectDashboard(session, selectedId);
+    if (entity && supportsMaintenance(entity)) void loadMaintenance(session, selectedId);
+  }, [selectedId, entities]);
+
+  const preview = useMemo(() => file?.type.startsWith("image/") ? URL.createObjectURL(file) : null, [file]);
+  useEffect(() => {
+    return () => { if (preview) URL.revokeObjectURL(preview); };
+  }, [preview]);
 
   const selected = entities.find((e) => e.id === selectedId) ?? null;
   const imageItems = useMemo(() => timeline.filter((m) => m.attachments.some((a) => a.attachment_type === "image" && a.objectUrl)), [timeline]);
@@ -91,11 +101,11 @@ export default function Home() {
   }
 
   function logout() {
-    revokeUrls(); localStorage.removeItem(SESSION_KEY); setSession(null); setEntities([]); setSelectedId(""); setTimeline([]);
+    revokeUrls(); localStorage.removeItem(SESSION_KEY); setSession(null); setEntities([]); setSelectedId(""); setTimeline([]); setDashboardItems([]); setMaintenanceItems([]);
   }
 
   async function loadEntities(current: Session) {
-    setLoading(true);
+    setPendingLoads((count) => count + 1);
     try {
       const params = new URLSearchParams({ select: "id,entity_type,name,description,metadata", order: "created_at.asc" });
       const { response } = await authFetch(current, `${supabaseUrl}/rest/v1/ofa_entities?${params.toString()}`);
@@ -104,14 +114,16 @@ export default function Home() {
       setEntities(data);
       if (!selectedId && data.length) {
         const navara = data.find((e) => String(e.metadata?.alias || "") === "Navara");
-        setSelectedId((navara ?? data[0]).id);
+        const initial = navara ?? data[0];
+        setSelectedId(initial.id);
+        setTab(initial.entity_type === "project" ? "overview" : "history");
       }
     } catch (err) { setMessage(`Feil: ${err instanceof Error ? err.message : String(err)}`); }
-    finally { setLoading(false); }
+    finally { setPendingLoads((count) => Math.max(0, count - 1)); }
   }
 
   async function loadTimeline(current: Session, entityId: string) {
-    setLoading(true);
+    setPendingLoads((count) => count + 1);
     try {
       const linkParams = new URLSearchParams({ select: "memory_id", entity_id: `eq.${entityId}` });
       const { response: linkRes, session: activeSession } = await authFetch(current, `${supabaseUrl}/rest/v1/ofa_memory_entities?${linkParams.toString()}`);
@@ -144,7 +156,85 @@ export default function Home() {
       }
       setTimeline(memories.map((m) => ({ ...m, attachments: map.get(m.id) ?? [] })));
     } catch (err) { setMessage(`Feil: ${err instanceof Error ? err.message : String(err)}`); }
-    finally { setLoading(false); }
+    finally { setPendingLoads((count) => Math.max(0, count - 1)); }
+  }
+
+  async function loadProjectDashboard(current: Session, entityId: string) {
+    setPendingLoads((count) => count + 1);
+    try {
+      const params = new URLSearchParams({
+        select: "project_entity_id,project_name,memory_id,memory_type,title,content,status,importance,occurred_at,recorded_at,metadata,verification_status,workflow_state,blocked_by,dashboard_section,section_order",
+        project_entity_id: `eq.${entityId}`,
+        order: "section_order.asc.nullslast,importance.desc.nullslast,occurred_at.desc.nullslast,recorded_at.desc",
+      });
+      const { response } = await authFetch(current, `${supabaseUrl}/rest/v1/ofa_project_dashboard_items?${params.toString()}`);
+      const data: ProjectDashboardItem[] = await response.json();
+      if (!response.ok) throw new Error("Kunne ikke lese prosjektoversikten");
+      setDashboardItems(data);
+    } catch (err) {
+      setDashboardItems([]);
+      setMessage(`Feil: ${err instanceof Error ? err.message : String(err)}`);
+    } finally { setPendingLoads((count) => Math.max(0, count - 1)); }
+  }
+
+  async function loadMaintenance(current: Session, entityId: string) {
+    setPendingLoads((count) => count + 1);
+    try {
+      const params = new URLSearchParams({
+        select: "id,entity_id,name,last_service_memory_id,last_performed_at,last_odometer_km,last_engine_hours,interval_km,interval_hours,interval_days,current_odometer_km,current_engine_hours,next_due_km,next_due_hours,next_due_date,maintenance_status,metadata",
+        entity_id: `eq.${entityId}`,
+        order: "name.asc",
+      });
+      const { response, session: activeSession } = await authFetch(current, `${supabaseUrl}/rest/v1/ofa_maintenance_dashboard_items?${params.toString()}`);
+      const data: MaintenanceItem[] = await response.json();
+      if (!response.ok) throw new Error("Kunne ikke lese vedlikeholdsplanen");
+      const detailParams = new URLSearchParams({ select: "id,description", entity_id: `eq.${entityId}`, active: "eq.true" });
+      const { response: detailResponse } = await authFetch(activeSession, `${supabaseUrl}/rest/v1/ofa_maintenance_plans?${detailParams.toString()}`);
+      const details: Array<{ id: string; description: string | null }> = await detailResponse.json();
+      if (!detailResponse.ok) throw new Error("Kunne ikke lese vedlikeholdsdetaljer");
+      const descriptions = new Map(details.map((item) => [item.id, item.description]));
+      setMaintenanceItems(data.map((item) => ({ ...item, description: descriptions.get(item.id) ?? null })));
+    } catch (err) {
+      setMaintenanceItems([]);
+      setMessage(`Feil: ${err instanceof Error ? err.message : String(err)}`);
+    } finally { setPendingLoads((count) => Math.max(0, count - 1)); }
+  }
+
+  async function saveMaintenance(id: string | null, input: MaintenancePlanInput) {
+    if (!session || !selected) return false;
+    setMaintenanceSaving(true); setMessage("");
+    try {
+      const body = id ? input : { ...input, entity_id: selected.id };
+      const url = id
+        ? `${supabaseUrl}/rest/v1/ofa_maintenance_plans?id=eq.${encodeURIComponent(id)}`
+        : `${supabaseUrl}/rest/v1/ofa_maintenance_plans`;
+      const { response, session: activeSession } = await authFetch(session, url, {
+        method: id ? "PATCH" : "POST",
+        headers: { "Content-Type": "application/json", Prefer: "return=minimal" },
+        body: JSON.stringify(body),
+      });
+      if (!response.ok) throw new Error("Kunne ikke lagre vedlikeholdspunktet");
+      setMessage(id ? "Vedlikeholdspunktet er oppdatert." : "Vedlikeholdspunktet er opprettet.");
+      await loadMaintenance(activeSession, selected.id);
+      return true;
+    } catch (err) { setMessage(`Feil: ${err instanceof Error ? err.message : String(err)}`); return false; }
+    finally { setMaintenanceSaving(false); }
+  }
+
+  async function deactivateMaintenance(item: MaintenanceItem) {
+    if (!session || !selected || !window.confirm(`Deaktivere «${item.name}»? Historikken blir ikke slettet.`)) return;
+    setMaintenanceSaving(true); setMessage("");
+    try {
+      const { response, session: activeSession } = await authFetch(session, `${supabaseUrl}/rest/v1/ofa_maintenance_plans?id=eq.${encodeURIComponent(item.id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Prefer: "return=minimal" },
+        body: JSON.stringify({ active: false }),
+      });
+      if (!response.ok) throw new Error("Kunne ikke deaktivere vedlikeholdspunktet");
+      setMessage("Vedlikeholdspunktet er deaktivert. Historikken er beholdt.");
+      await loadMaintenance(activeSession, selected.id);
+    } catch (err) { setMessage(`Feil: ${err instanceof Error ? err.message : String(err)}`); }
+    finally { setMaintenanceSaving(false); }
   }
 
   async function upload(e: FormEvent) {
@@ -160,7 +250,7 @@ export default function Home() {
       const { response, session: activeSession } = await authFetch(session, `${supabaseUrl}/functions/v1/ofa-upload`, { method: "POST", body: form });
       const data = await response.json();
       if (!response.ok) throw new Error(data?.error || `HTTP ${response.status}`);
-      setFile(null); setPreview(null); setTitle(""); setNote(""); setMessage("✅ Lagret i OFA");
+      setFile(null); setTitle(""); setNote(""); setMessage("✅ Lagret i OFA");
       await loadTimeline(activeSession, selected.id); setTab("images");
     } catch (err) { setMessage(`Feil: ${err instanceof Error ? err.message : String(err)}`); }
     finally { setBusy(false); }
@@ -184,7 +274,7 @@ export default function Home() {
         <div style={entityStripStyle}>
           {entities.map((entity) => {
             const active = entity.id === selectedId;
-            return <button key={entity.id} onClick={() => { setSelectedId(entity.id); setTab("history"); setMessage(""); }} style={{ ...entityButtonStyle, border: active ? "1px solid #888" : "1px solid #2c2c2c", background: active ? "#262626" : "#111" }}>
+            return <button key={entity.id} onClick={() => { setSelectedId(entity.id); setTab(entity.entity_type === "project" ? "overview" : "history"); setDashboardItems([]); setMaintenanceItems([]); setMessage(""); }} style={{ ...entityButtonStyle, border: active ? "1px solid #888" : "1px solid #2c2c2c", background: active ? "#262626" : "#111" }}>
               <div style={{ fontSize: 12, color: "#9ca3af" }}>{entityTypeLabel(entity.entity_type)}</div>
               <div style={{ fontWeight: 800, fontSize: 16 }}>{String(entity.metadata?.alias || entity.name)}</div>
             </button>;
@@ -200,11 +290,34 @@ export default function Home() {
         </div>
 
         <div style={statsGridStyle}><Stat label="Historikk" value={timeline.length} /><Stat label="Bilder" value={imageItems.length} /><Stat label="Oppgaver" value={activeTasks.length} /></div>
-        <div style={tabsStyle}><Tab active={tab === "history"} onClick={() => setTab("history")}>Historikk</Tab><Tab active={tab === "images"} onClick={() => setTab("images")}>Bilder</Tab><Tab active={tab === "upload"} onClick={() => setTab("upload")}>+ Nytt</Tab></div>
+        <div style={tabsStyle}>
+          {selected.entity_type === "project" && <Tab active={tab === "overview"} onClick={() => setTab("overview")}>Oversikt</Tab>}
+          {supportsMaintenance(selected) && <Tab active={tab === "maintenance"} onClick={() => setTab("maintenance")}>Vedlikehold</Tab>}
+          <Tab active={tab === "history"} onClick={() => setTab("history")}>Tidslinje</Tab>
+          <Tab active={tab === "images"} onClick={() => setTab("images")}>Bilder</Tab>
+          <Tab active={tab === "upload"} onClick={() => setTab("upload")}>+ Nytt</Tab>
+        </div>
         {message && <Status message={message} />}
 
+        {selected.entity_type === "project" && tab === "overview" && <ProjectDashboard
+          project={selected}
+          items={dashboardItems}
+          loading={loading}
+          onRefresh={() => void loadProjectDashboard(session, selected.id)}
+        />}
+
+        {supportsMaintenance(selected) && tab === "maintenance" && <MaintenanceView
+          items={maintenanceItems}
+          history={timeline}
+          loading={loading}
+          saving={maintenanceSaving}
+          onRefresh={() => void loadMaintenance(session, selected.id)}
+          onSave={saveMaintenance}
+          onDeactivate={deactivateMaintenance}
+        />}
+
         {tab === "history" && <section>
-          <div style={sectionHeaderStyle}><h2 style={{ margin: 0 }}>Historikk</h2><button onClick={() => void loadTimeline(session, selected.id)} disabled={loading} style={secondaryButtonStyle}>{loading ? "Laster…" : "Oppdater"}</button></div>
+          <div style={sectionHeaderStyle}><h2 style={{ margin: 0 }}>{selected.entity_type === "project" ? "Komplett tidslinje" : "Historikk"}</h2><button onClick={() => void loadTimeline(session, selected.id)} disabled={loading} style={secondaryButtonStyle}>{loading ? "Laster…" : "Oppdater"}</button></div>
           {!loading && timeline.length === 0 && <Empty text="Ingen historikk på denne ennå." />}
           <div style={{ display: "grid", gap: 12 }}>{timeline.map((item) => <article key={item.id} style={timelineCardStyle}>
             <div style={timelineTopStyle}><span style={typeBadgeStyle}>{typeLabel(item.memory_type)}</span><span style={{ color: "#8b8b8b", fontSize: 13 }}>{formatDate(item.occurred_at || item.recorded_at)}</span></div>
@@ -240,6 +353,7 @@ function Tab({ active, onClick, children }: { active: boolean; onClick: () => vo
 function Status({ message }: { message: string }) { return <div style={{ margin: "14px 0", padding: 13, borderRadius: 11, background: "#171717" }}>{message}</div>; }
 function Empty({ text }: { text: string }) { return <div style={{ ...cardStyle, color: "#9ca3af" }}>{text}</div>; }
 function entityTypeLabel(type: string) { const labels: Record<string, string> = { vehicle: "Kjøretøy", machine: "Maskin", implement: "Redskap", project: "Prosjekt", field: "Skifte" }; return labels[type] || "Objekt"; }
+function supportsMaintenance(entity: Entity) { return entity.entity_type === "vehicle" || entity.entity_type === "machine"; }
 function typeLabel(type: string) { const labels: Record<string, string> = { image: "Bilde", service: "Service", task: "Oppgave", observation: "Observasjon", purchase: "Innkjøp", measurement: "Måling", event: "Hendelse", note: "Notat", decision: "Beslutning", document: "Dokument" }; return labels[type] || type; }
 function formatDate(value: string) { try { return new Intl.DateTimeFormat("nb-NO", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value)); } catch { return value; } }
 
@@ -255,7 +369,7 @@ const entityButtonStyle: React.CSSProperties = { minWidth: 135, textAlign: "left
 const machineCardStyle: React.CSSProperties = { padding: 18, border: "1px solid #262626", borderRadius: 16, background: "#101010" };
 const statsGridStyle: React.CSSProperties = { display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, margin: "12px 0" };
 const statStyle: React.CSSProperties = { padding: 14, borderRadius: 13, border: "1px solid #262626", background: "#101010" };
-const tabsStyle: React.CSSProperties = { display: "flex", gap: 8, margin: "16px 0 20px" };
+const tabsStyle: React.CSSProperties = { display: "flex", gap: 8, margin: "16px 0 20px", overflowX: "auto", WebkitOverflowScrolling: "touch" };
 const sectionHeaderStyle: React.CSSProperties = { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 12 };
 const timelineCardStyle: React.CSSProperties = { padding: 16, border: "1px solid #262626", borderRadius: 14, background: "#101010" };
 const timelineTopStyle: React.CSSProperties = { display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" };

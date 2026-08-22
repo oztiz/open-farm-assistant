@@ -4,6 +4,9 @@ export type Entity = {
   name: string;
   description: string | null;
   metadata: Record<string, unknown>;
+  current_odometer_km: number | null;
+  current_engine_hours: number | null;
+  meter_reading_at: string | null;
 };
 
 export type Attachment = {
@@ -25,6 +28,8 @@ export type Memory = {
   importance: number;
   status: string;
   source: string;
+  odometer_km: number | null;
+  engine_hours: number | null;
 };
 
 export type TimelineItem = Memory & {
@@ -69,6 +74,14 @@ export type MaintenanceItem = {
   next_due_date: string | null;
   maintenance_status: "ok" | "due_soon" | "overdue";
   metadata: Record<string, unknown>;
+  remaining_km: number | null;
+  remaining_hours: number | null;
+  remaining_days: number | null;
+};
+
+export type MeterReadingInput = {
+  odometer_km: number | null;
+  engine_hours: number | null;
 };
 
 export type MaintenancePlanInput = {
@@ -78,4 +91,10 @@ export type MaintenancePlanInput = {
   interval_hours: number | null;
   interval_days: number | null;
   last_service_memory_id: string | null;
+};
+
+export type MaintenancePlanFormInput = MaintenancePlanInput & {
+  last_performed_at: string | null;
+  last_odometer_km: number | null;
+  last_engine_hours: number | null;
 };

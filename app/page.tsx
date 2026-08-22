@@ -2,8 +2,9 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { MaintenanceView } from "./maintenance-view";
+import { MeterReadingCard, MeterReadingEditor } from "./meter-reading-card";
 import { ProjectDashboard } from "./project-dashboard";
-import type { Attachment, Entity, MaintenanceItem, MaintenancePlanInput, Memory, ProjectDashboardItem, TimelineItem } from "./ofa-types";
+import type { Attachment, Entity, MaintenanceItem, MaintenancePlanFormInput, Memory, MeterReadingInput, ProjectDashboardItem, TimelineItem } from "./ofa-types";
 
 type Session = { access_token: string; refresh_token: string; user: { id: string; email?: string } };
 type TabName = "overview" | "maintenance" | "history" | "images" | "upload";
@@ -24,9 +25,12 @@ export default function Home() {
   const [file, setFile] = useState<File | null>(null);
   const [title, setTitle] = useState("");
   const [note, setNote] = useState("");
+  const [performedOdometer, setPerformedOdometer] = useState("");
+  const [performedHours, setPerformedHours] = useState("");
   const [tab, setTab] = useState<TabName>("history");
   const [busy, setBusy] = useState(false);
   const [maintenanceSaving, setMaintenanceSaving] = useState(false);
+  const [meterSaving, setMeterSaving] = useState(false);
   const [pendingLoads, setPendingLoads] = useState(0);
   const [message, setMessage] = useState("");
   const loading = pendingLoads > 0;
@@ -107,7 +111,7 @@ export default function Home() {
   async function loadEntities(current: Session) {
     setPendingLoads((count) => count + 1);
     try {
-      const params = new URLSearchParams({ select: "id,entity_type,name,description,metadata", order: "created_at.asc" });
+      const params = new URLSearchParams({ select: "id,entity_type,name,description,metadata,current_odometer_km,current_engine_hours,meter_reading_at", order: "created_at.asc" });
       const { response } = await authFetch(current, `${supabaseUrl}/rest/v1/ofa_entities?${params.toString()}`);
       const data: Entity[] = await response.json();
       if (!response.ok) throw new Error("Kunne ikke lese maskiner");
@@ -132,7 +136,7 @@ export default function Home() {
       const ids = links.map((l) => l.memory_id);
       if (!ids.length) { revokeUrls(); setTimeline([]); return; }
 
-      const memoryParams = new URLSearchParams({ select: "id,occurred_at,recorded_at,memory_type,title,content,importance,status,source", id: `in.(${ids.join(",")})`, order: "occurred_at.desc.nullslast,recorded_at.desc" });
+      const memoryParams = new URLSearchParams({ select: "id,occurred_at,recorded_at,memory_type,title,content,importance,status,source,odometer_km,engine_hours", id: `in.(${ids.join(",")})`, order: "occurred_at.desc.nullslast,recorded_at.desc" });
       const { response: memoryRes } = await authFetch(activeSession, `${supabaseUrl}/rest/v1/ofa_memories?${memoryParams.toString()}`);
       const memories: Memory[] = await memoryRes.json();
       if (!memoryRes.ok) throw new Error("Kunne ikke lese historikk");
@@ -181,7 +185,7 @@ export default function Home() {
     setPendingLoads((count) => count + 1);
     try {
       const params = new URLSearchParams({
-        select: "id,entity_id,name,last_service_memory_id,last_performed_at,last_odometer_km,last_engine_hours,interval_km,interval_hours,interval_days,current_odometer_km,current_engine_hours,next_due_km,next_due_hours,next_due_date,maintenance_status,metadata",
+        select: "id,entity_id,name,last_service_memory_id,last_performed_at,last_odometer_km,last_engine_hours,interval_km,interval_hours,interval_days,current_odometer_km,current_engine_hours,next_due_km,next_due_hours,next_due_date,maintenance_status,metadata,remaining_km,remaining_hours,remaining_days",
         entity_id: `eq.${entityId}`,
         order: "name.asc",
       });
@@ -200,11 +204,24 @@ export default function Home() {
     } finally { setPendingLoads((count) => Math.max(0, count - 1)); }
   }
 
-  async function saveMaintenance(id: string | null, input: MaintenancePlanInput) {
+  async function saveMaintenance(id: string | null, input: MaintenancePlanFormInput) {
     if (!session || !selected) return false;
     setMaintenanceSaving(true); setMessage("");
     try {
-      const body = id ? input : { ...input, entity_id: selected.id };
+      const { last_performed_at, last_odometer_km, last_engine_hours, ...planInput } = input;
+      let lastServiceMemoryId = planInput.last_service_memory_id;
+      if (lastServiceMemoryId || last_performed_at || last_odometer_km !== null || last_engine_hours !== null) {
+        const { response: memoryResponse } = await authFetch(session, `${supabaseUrl}/rest/v1/rpc/ofa_upsert_maintenance_service_memory`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ p_entity_id: selected.id, p_memory_id: lastServiceMemoryId, p_plan_name: planInput.name, p_performed_at: last_performed_at, p_odometer_km: last_odometer_km, p_engine_hours: last_engine_hours }),
+        });
+        const memoryResult = await memoryResponse.json();
+        if (!memoryResponse.ok) throw new Error(memoryResult?.message || memoryResult?.error || "Kunne ikke lagre siste utførelse i historikken");
+        lastServiceMemoryId = String(memoryResult);
+      }
+      const planBody = { ...planInput, last_service_memory_id: lastServiceMemoryId };
+      const body = id ? planBody : { ...planBody, entity_id: selected.id };
       const url = id
         ? `${supabaseUrl}/rest/v1/ofa_maintenance_plans?id=eq.${encodeURIComponent(id)}`
         : `${supabaseUrl}/rest/v1/ofa_maintenance_plans`;
@@ -215,7 +232,7 @@ export default function Home() {
       });
       if (!response.ok) throw new Error("Kunne ikke lagre vedlikeholdspunktet");
       setMessage(id ? "Vedlikeholdspunktet er oppdatert." : "Vedlikeholdspunktet er opprettet.");
-      await loadMaintenance(activeSession, selected.id);
+      await Promise.all([loadMaintenance(activeSession, selected.id), loadTimeline(activeSession, selected.id)]);
       return true;
     } catch (err) { setMessage(`Feil: ${err instanceof Error ? err.message : String(err)}`); return false; }
     finally { setMaintenanceSaving(false); }
@@ -237,9 +254,43 @@ export default function Home() {
     finally { setMaintenanceSaving(false); }
   }
 
+  async function saveCurrentMeter(input: MeterReadingInput) {
+    if (!session || !selected) return false;
+    setMeterSaving(true); setMessage("");
+    try {
+      const body = { current_odometer_km: input.odometer_km, current_engine_hours: input.engine_hours, meter_reading_at: new Date().toISOString() };
+      const { response, session: activeSession } = await authFetch(session, `${supabaseUrl}/rest/v1/ofa_entities?id=eq.${encodeURIComponent(selected.id)}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json", Prefer: "return=minimal" }, body: JSON.stringify(body),
+      });
+      if (!response.ok) throw new Error("Kunne ikke oppdatere tellerstanden");
+      setEntities((current) => current.map((entity) => entity.id === selected.id ? { ...entity, ...body } : entity));
+      await loadMaintenance(activeSession, selected.id);
+      setMessage("Tellerstanden er oppdatert.");
+      return true;
+    } catch (err) { setMessage(`Feil: ${err instanceof Error ? err.message : String(err)}`); return false; }
+    finally { setMeterSaving(false); }
+  }
+
+  async function saveHistoryMeter(memoryId: string, input: MeterReadingInput) {
+    if (!session || !selected) return false;
+    setMeterSaving(true); setMessage("");
+    try {
+      const { response, session: activeSession } = await authFetch(session, `${supabaseUrl}/rest/v1/ofa_memories?id=eq.${encodeURIComponent(memoryId)}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json", Prefer: "return=minimal" }, body: JSON.stringify(input),
+      });
+      if (!response.ok) throw new Error("Kunne ikke lagre tellerstanden på historikkposten");
+      await Promise.all([loadTimeline(activeSession, selected.id), loadMaintenance(activeSession, selected.id)]);
+      setMessage("Tellerstanden på historikkposten er oppdatert.");
+      return true;
+    } catch (err) { setMessage(`Feil: ${err instanceof Error ? err.message : String(err)}`); return false; }
+    finally { setMeterSaving(false); }
+  }
+
   async function upload(e: FormEvent) {
     e.preventDefault();
     if (!session || !selected || !file) return;
+    const meters = meterInput(performedOdometer, performedHours);
+    if (!meters) { setMessage("Feil: Tellerstand ved utførelse må være tom eller et positivt tall."); return; }
     setBusy(true); setMessage("Laster opp…");
     try {
       const form = new FormData();
@@ -250,8 +301,14 @@ export default function Home() {
       const { response, session: activeSession } = await authFetch(session, `${supabaseUrl}/functions/v1/ofa-upload`, { method: "POST", body: form });
       const data = await response.json();
       if (!response.ok) throw new Error(data?.error || `HTTP ${response.status}`);
-      setFile(null); setTitle(""); setNote(""); setMessage("✅ Lagret i OFA");
-      await loadTimeline(activeSession, selected.id); setTab("images");
+      if ((meters.odometer_km !== null || meters.engine_hours !== null) && data?.memory?.id) {
+        const { response: meterResponse } = await authFetch(activeSession, `${supabaseUrl}/rest/v1/ofa_memories?id=eq.${encodeURIComponent(data.memory.id)}`, {
+          method: "PATCH", headers: { "Content-Type": "application/json", Prefer: "return=minimal" }, body: JSON.stringify(meters),
+        });
+        if (!meterResponse.ok) throw new Error("Vedlegget ble lagret, men tellerstanden kunne ikke lagres");
+      }
+      setFile(null); setTitle(""); setNote(""); setPerformedOdometer(""); setPerformedHours(""); setMessage("✅ Lagret i OFA");
+      await Promise.all([loadTimeline(activeSession, selected.id), ...(supportsMaintenance(selected) ? [loadMaintenance(activeSession, selected.id)] : [])]); setTab("images");
     } catch (err) { setMessage(`Feil: ${err instanceof Error ? err.message : String(err)}`); }
     finally { setBusy(false); }
   }
@@ -297,6 +354,7 @@ export default function Home() {
           <Tab active={tab === "images"} onClick={() => setTab("images")}>Bilder</Tab>
           <Tab active={tab === "upload"} onClick={() => setTab("upload")}>+ Nytt</Tab>
         </div>
+        {supportsMaintenance(selected) && <MeterReadingCard entity={selected} saving={meterSaving} onSave={saveCurrentMeter} />}
         {message && <Status message={message} />}
 
         {selected.entity_type === "project" && tab === "overview" && <ProjectDashboard
@@ -309,6 +367,7 @@ export default function Home() {
         {supportsMaintenance(selected) && tab === "maintenance" && <MaintenanceView
           items={maintenanceItems}
           history={timeline}
+          {...meterCapabilities(selected)}
           loading={loading}
           saving={maintenanceSaving}
           onRefresh={() => void loadMaintenance(session, selected.id)}
@@ -323,6 +382,7 @@ export default function Home() {
             <div style={timelineTopStyle}><span style={typeBadgeStyle}>{typeLabel(item.memory_type)}</span><span style={{ color: "#8b8b8b", fontSize: 13 }}>{formatDate(item.occurred_at || item.recorded_at)}</span></div>
             <h3 style={{ margin: "8px 0 6px" }}>{item.title}</h3><p style={{ margin: 0, color: "#c7c7c7", whiteSpace: "pre-wrap" }}>{item.content}</p>
             {item.attachments.filter((a) => a.attachment_type === "image" && a.objectUrl).map((a) => <img key={a.id} src={a.objectUrl} alt={a.original_name || item.title} style={timelineImageStyle} />)}
+            {supportsMaintenance(selected) && <MeterReadingEditor odometerKm={item.odometer_km} engineHours={item.engine_hours} {...meterCapabilities(selected)} saving={meterSaving} onSave={(input) => saveHistoryMeter(item.id, input)} />}
           </article>)}</div>
         </section>}
 
@@ -339,6 +399,10 @@ export default function Home() {
           {preview && <img src={preview} alt="Forhåndsvisning" style={{ width: "100%", maxHeight: 420, objectFit: "contain", borderRadius: 12, background: "#111" }} />}
           <label><div style={labelStyle}>Tittel (valgfritt)</div><input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Hva er dette?" style={inputStyle} /></label>
           <label><div style={labelStyle}>Notat (valgfritt)</div><textarea value={note} onChange={(e) => setNote(e.target.value)} placeholder="Hva gjorde du / hva viser bildet?" rows={4} style={{ ...inputStyle, resize: "vertical" }} /></label>
+          {supportsMaintenance(selected) && <div style={meterFieldsStyle}>
+            {meterCapabilities(selected).showOdometer && <label><div style={labelStyle}>Kilometerstand ved utførelse (valgfritt)</div><input type="number" min="0" step="1" inputMode="numeric" value={performedOdometer} onChange={(event) => setPerformedOdometer(event.target.value)} style={inputStyle} /></label>}
+            {meterCapabilities(selected).showEngineHours && <label><div style={labelStyle}>Driftstimer ved utførelse (valgfritt)</div><input type="number" min="0" step="0.1" inputMode="decimal" value={performedHours} onChange={(event) => setPerformedHours(event.target.value)} style={inputStyle} /></label>}
+          </div>}
           <button disabled={!file || busy} style={buttonStyle}>{busy ? "Lagrer…" : "Lagre i OFA"}</button>
         </form>}
       </>}
@@ -354,6 +418,22 @@ function Status({ message }: { message: string }) { return <div style={{ margin:
 function Empty({ text }: { text: string }) { return <div style={{ ...cardStyle, color: "#9ca3af" }}>{text}</div>; }
 function entityTypeLabel(type: string) { const labels: Record<string, string> = { vehicle: "Kjøretøy", machine: "Maskin", implement: "Redskap", project: "Prosjekt", field: "Skifte" }; return labels[type] || "Objekt"; }
 function supportsMaintenance(entity: Entity) { return entity.entity_type === "vehicle" || entity.entity_type === "machine"; }
+function meterCapabilities(entity: Entity) {
+  const configured = Array.isArray(entity.metadata?.meter_types) ? entity.metadata.meter_types.map(String) : [];
+  const both = (configured.includes("odometer_km") && configured.includes("engine_hours"))
+    || (entity.current_odometer_km !== null && entity.current_engine_hours !== null);
+  return {
+    showOdometer: both || configured.includes("odometer_km") || entity.entity_type === "vehicle",
+    showEngineHours: both || configured.includes("engine_hours") || entity.entity_type === "machine",
+  };
+}
+function meterInput(odometer: string, hours: string): MeterReadingInput | null {
+  const odometerKm = optionalMeter(odometer, true);
+  const engineHours = optionalMeter(hours, false);
+  if ((odometer.trim() && odometerKm === null) || (hours.trim() && engineHours === null)) return null;
+  return { odometer_km: odometerKm, engine_hours: engineHours };
+}
+function optionalMeter(value: string, integer: boolean) { if (!value.trim()) return null; const parsed = Number(value.replace(",", ".")); if (!Number.isFinite(parsed) || parsed < 0) return null; return integer ? Math.round(parsed) : Math.round(parsed * 10) / 10; }
 function typeLabel(type: string) { const labels: Record<string, string> = { image: "Bilde", service: "Service", task: "Oppgave", observation: "Observasjon", purchase: "Innkjøp", measurement: "Måling", event: "Hendelse", note: "Notat", decision: "Beslutning", document: "Dokument" }; return labels[type] || type; }
 function formatDate(value: string) { try { return new Intl.DateTimeFormat("nb-NO", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value)); } catch { return value; } }
 
@@ -376,5 +456,6 @@ const timelineTopStyle: React.CSSProperties = { display: "flex", justifyContent:
 const typeBadgeStyle: React.CSSProperties = { display: "inline-block", padding: "4px 8px", borderRadius: 999, background: "#262626", color: "#d4d4d4", fontSize: 12, fontWeight: 700 };
 const timelineImageStyle: React.CSSProperties = { width: "100%", maxHeight: 420, objectFit: "cover", borderRadius: 12, marginTop: 12 };
 const galleryStyle: React.CSSProperties = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 12 };
+const meterFieldsStyle: React.CSSProperties = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10 };
 const galleryCardStyle: React.CSSProperties = { overflow: "hidden", border: "1px solid #262626", borderRadius: 14, background: "#101010" };
 const galleryImageStyle: React.CSSProperties = { width: "100%", aspectRatio: "4 / 3", objectFit: "cover", display: "block" };

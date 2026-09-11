@@ -1,5 +1,11 @@
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
+## OFA backup
+
+See [the backup setup guide](scripts/backup/README.md) for daily encrypted
+Supabase database + Storage backups to Google Drive, required Actions Secrets,
+manual runs, status files and restore verification.
+
 ## Getting Started
 
 First, run the development server:

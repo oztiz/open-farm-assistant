@@ -39,3 +39,11 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Backup development / local credentials (backup payloads live outside the repo)
+__pycache__/
+*.pyc
+*.age
+*.dump
+ofa-backup-identity.txt
+rclone.conf

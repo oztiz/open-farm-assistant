@@ -1,60 +1,45 @@
-# AgShare privat plugin – testutgave
-Status: lokal implementasjon og pluginpakke klargjort. Ikke lastet opp, ikke deployert, ikke innlogget eller ende-til-ende-verifisert.
-Valgt av brukeren: gjenbruk eksisterende OFA-innlogging; Supabase MCP og AgShare MCP forblir separate tilkoblinger.
+# AgShare (test) – status 8. oktober 2026
 
-Første utgave er kun lesing fra AgShare. Skriveverktøy finnes fortsatt for den gamle bridge-integrasjonen i koden, men OAuth-tokenet får dem ikke listet og kan ikke kalle dem. Ingen ny passordinnlogging eller egen OAuth-tokenutstedelse.
+Privat plugin er opprettet: [AgShare (test)](https://chatgpt.com/plugins/plugins_6ac7f7b510e0819194e76bdad8cbb5b1).
+Plugin-ID: plugins_6ac7f7b510e0819194e76bdad8cbb5b1.
+Release: pluginrel_6ac7f7b6731c819185a893bca9af792f. Privat, personlig, versjon 0.1.0.
 
-Kodekopi bygger på main e07a2d85ea6dacefd272003a6c4f8892ab075823. Den nye feature/agshare-oauth-branchen er ikke endret. Alle endringer er lokale; produksjonen er uendret.
+## Utført
+- OFA-test (ovrtuhbuhnxiofmqosou) er gjenopptatt og bekreftet ACTIVE_HEALTHY.
+- Supabase OAuth Server er aktiv i OFA-test. Dynamisk klientregistrering er av.
+- Site URL er testutgavens Preview-origin; autorisasjonsside er /agshare/connect. Begge er lest tilbake i kontrollpanelet.
+- Eksisterende testbruker er bevart. Ingen passord eller produksjonsbrukere er endret.
+- Rolle agshare_mcp er opprettet i testprosjektet etter fullført gjenoppretting. Lest tilbake: NOLOGIN, NOINHERIT, ingen bypass RLS/superuser. Authenticator har ikke medlemskap; ingen tabelltilgang i public, auth eller storage.
+- Separat GitHub-branch feature/agshare-private-test er opprettet og pushet. Main og feature/agshare-oauth er uendret.
+- Branch-spesifikke Vercel Preview-variabler peker til OFA-test. Produksjonsvariablene er ikke endret.
+- Preview bruker utelukkende et syntetisk skifte og en syntetisk AB-linje. Ingen produksjonsnøkkel og ingen AgShare-nettverkskall.
+- Next.js og eslint-config-next er oppdatert til 16.4.0 bare i testbranchen. Runtime-avhengighetskontrollen har 0 meldte sårbarheter; fem high-poster gjenstår i utviklingsverktøyenes glob-kjede. Ingen tvungen/brytende nedgradering er gjort.
+- Bygg, typekontroll, lint og lokale OAuth-tester består.
 
-## Implementert
-- /agshare/connect: samtykkeside som gjenbruker ofa_session fra OFA på samme origin. Kontrollerer signerte claims og krever førstepartsøkt for riktig eier.
-- Supabase SDK behandler samtykke og tokenfornyelse; egen AES-cookie og HMAC-token fjernes fra den nye løsningen ved at de ikke tas med fra feature-branchen.
-- MCP verifiserer ES256/RS256 via fast Supabase-JWKS, issuer, konkret MCP-audience, eier, OAuth-client_id og serverutstedt agshare_access=read.
-- Maksimal tokenlevetid og alder 15 minutter.
-- Isolert database-rolle agshare_mcp kreves i tokenet. Vanlige Supabase-innloggingstoken godtas ikke av MCP.
-- OAuth-only virker uten bridge-konfigurasjon. 401 annonserer ressursmetadata.
-- Innloggingen er av som standard. AGSHARE_OAUTH_ENABLED må settes uttrykkelig.
+## Aktiv testadresse
+https://open-farm-assistant-git-feature-agshare-private-test-ofa3.vercel.app
 
-## Før aktiv testtilkobling
-OFA-test (ovrtuhbuhnxiofmqosou) er INACTIVE ved kontroll. Produksjonsprosjektet er jpdactlurwonltothqim. Vi har ikke gjenopptatt, endret eller opprettet noe Supabase-prosjekt.
+Preview-deployment dpl_FgWDQoheiJWCg6Sw4uYxjcY1TWeB er bekreftet READY og target=null (Preview).
+Kildecommit: ae64422137950b7d7ecd704df0b5835d900f9ad6.
 
-1. Gjenoppta OFA-test etter brukerens godkjenning, og bruk en separat Vercel Preview med testprosjektets URL, publishable key og testbruker. Ikke bruk produksjonens AgShare-nøkkel i Preview.
-2. Supabase OAuth Server må være aktiv i testprosjektet. Behold eller opprett asymmetriske signeringsnøkler. Ingen nøkkelrotasjon i produksjon.
-3. Autorisasjonsside /agshare/connect må være på samme origin som OFA-innloggingen. Eksisterende innlogging følger prosjektets egne regler, inkludert MFA dersom satt opp.
-4. Registrer en separat OAuth-klient for AgShare-test med eksakt callback fra ChatGPTs MCP-administrasjon. Bruk en støttet klientregistreringsmetode (forhåndsregistrert klient først hvis tilgjengelig). Ikke anta testfilenes gamle callback.
-5. Sett:
-   - AGSHARE_OAUTH_ENABLED=true
-   - AGSHARE_OAUTH_PUBLIC_ORIGIN=<eksakt HTTPS-origin for testutgaven>
-   - AGSHARE_OAUTH_OWNER_USER_ID=<testbrukerens verifiserte UUID>
-   - AGSHARE_OAUTH_CLIENT_ID=<faktisk registrert klient-ID>
-   - AGSHARE_OAUTH_REDIRECT_URI=<eksakt HTTPS-callback fra ChatGPT>
-   - NEXT_PUBLIC_SUPABASE_URL og NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY for OFA-test.
-   - AGSHARE_API_KEY bare hvis testutgaven skal kontakte en separat AgShare-testkonto. Ingen produksjonsnøkkel i Preview.
-6. Supabase custom access-token hook må settes på testprosjektet slik at bare denne klientens token får MCP-audience, agshare_access=read, role=agshare_mcp og høyst 900 sekunders levetid. SQL-filen er en gjennomgåbar mal med plassholdere, ikke en anvendt migrasjon. Komponer med eventuell eksisterende hook; ikke erstatt den blindt.
-7. Rolle agshare_mcp skal ikke kunne brukes av PostgRESTs authenticator og skal ikke ha tabell-, RPC- eller Storage-tilgang. Ikke gi den medlemskap i authenticated/anon eller tilgang til private data. Kontroller også offentlige grants og definer-funksjoner. Den ukjente rollen skal heller ikke få implicit bred tilgang via Storage. Ikke sett innloggingen aktiv før faktiske API-negativtester passerer.
-8. Test OAuth-authorize, token, refresh, actual resource/audience og callback/issuer gjennom ChatGPT. Ikke annonser egne agshare-scopes; Supabase støtter dem ikke ennå.
-9. Oppdater pluginpakkens MCP-URL til den verifiserte Preview-adressen før testinstallasjon. URL i pakken er det verifiserte produksjonsdomenet, ikke en aktivert ny auth-tjeneste. Ikke last opp denne pakken før faktisk OAuth er på plass.
+Offentlig discovery er testet med HTTP 200 på /.well-known/oauth-protected-resource.
+Uautentisert POST /api/agshare/mcp gir HTTP 401 med korrekt WWW-Authenticate.
 
-## Tilbakekalling
-Supabase revokeGrant brukes for å stoppe videre fornyelse. Lokal JWT-verifisering garanterer ikke at et allerede utstedt access-token stoppes straks ved tilbakekalling: det kan virke frem til utløp, maksimalt 15 minutter. Hvis umiddelbar tilbakekalling kreves, må en autoritativ grant/session-status kontrolleres ved hvert MCP-kall før utrulling. Slå AGSHARE_OAUTH_ENABLED av og deploy ny konfigurasjon for å stenge denne tilkoblingen helt.
+## Gjenstående før innlogging kan brukes
+ChatGPT-nettleserfanen krever brukerinnlogging. Den faktiske callback-adressen og OAuth-klientoppsettet er derfor ikke hentet ennå. Ikke anta den gamle connector_platform_oauth_redirect-adressen: testprosjektets discovery annonserer ikke issuer-response-identifikasjon.
 
-## Verifisering
-- Typekontroll bestått.
-- ESLint for alle berørte appfiler bestått.
-- Next.js produksjonsbuild bestått.
-- fire rapporterte lokale testtilfeller bestått; token-testen inkluderer ugyldig signatur, annen eier/klient/issuer/audience, førstepartsrolle, skriveclaims, manglende claims og utløp.
-- Mock-integrasjon viser OAuth-only tilkobling, to leseverktøy, 403 på skriveforsøk uten AgShare-kall, 401 med discovery og blokkert fremmed Origin.
-- Ekte nettverks-/OAuth-innlogging, SDK-samtykke i nettleseren og direkte Data API/RPC/Storage-avvisning er ikke testet.
-- npm audit for runtime-avhengigheter melder 6 poster, inkludert critical for eksisterende Next 16.2.4. Dette er avhengighetsmeldinger, ikke verifisert utnyttbarhet i OFA. Ingen av de nye direkte bibliotekene jose / supabase-js ble flagget. Next og transitivene må vurderes/oppdateres før ny produksjonsutrulling; ingen bred oppgradering er gjort i denne auth-utgaven.
+AGSHARE_OAUTH_CLIENT_ID og AGSHARE_OAUTH_REDIRECT_URI er ikke satt. Dette er bevisst: token-verifikatoren avviser alle tokens før riktig klient er konfigurert; samtykkesiden viser at oppsett ikke er klart. Den nye token-hooken er ennå ikke installert eller aktivert. Eksisterende test-hook er inspisert og bevares.
 
-## Leveranser
-- backend-source.zip: kodekopi med endringer, uten node_modules, .git, hemmeligheter eller byggoutput.
-- backend.patch: samlet diff, inkludert nye filer og lockfil.
-- agshare-private-draft.zip: privat pluginpakke, ikke lastet opp. Et pluginarkiv oppretter ikke OAuth-konfigurasjon.
-- hook-reference.sql: forslag for testoppsett; ingen SQL er utført.
+Neste steg etter ChatGPT-nettleserinnlogging:
+1. Hent pluginens faktiske OAuth-callback og klientregistreringsvalg.
+2. Registrer en separat testklient, uten å gi databaseadgang eller aktivere generell dynamisk registrering.
+3. Tilpass og test token-hooken mot testklientens ID, eier og MCP-audience; aktiver bare denne i OFA-test. Vanlig OFA-innlogging skal bevares.
+4. Sett de to manglende Preview-variablene og deploy ny Preview.
+5. Brukeren logger inn på testutgaven og godkjenner lesing; deretter testes initialize/tools-list/field-read gjennom pluginen, nektet skriving, feil bruker, fornyelse og direkte Data API/RPC/Storage-avvisning.
+6. Ingen produksjonsutrulling eller ekte AgShare-data før test er fullført og separat avtalt.
 
-Kilder:
-- https://developers.openai.com/plugins/build/auth
-- https://supabase.com/docs/guides/auth/oauth-server/getting-started
-- https://supabase.com/docs/guides/auth/oauth-server/oauth-flows
-- https://supabase.com/docs/guides/auth/oauth-server/token-security
+Tilbakekalling: Supabase-grant kan trekkes tilbake for å stoppe fornyelse. Offline-verifisert access-token kan virke frem til utløp (høyst 15 minutter). Umiddelbar tilbakekalling krever et ekstra autoritativt oppslag; den er ikke implementert i denne utgaven.
+
+SQL-filen hook-reference.sql er fortsatt en gjennomgåbar mal med plassholdere, ikke en anvendt migrasjon. Ikke kjør den ukritisk eller erstatt eksisterende hooks. Ingen service_role-nøkler, innloggingspassord eller refresh-token er hentet eller delt.
+
+Vedlegg: backend-source.zip, backend.patch, agshare-private-draft.zip (pakken som ble brukt til opprettelsen), og ofa-test-oauth.png.

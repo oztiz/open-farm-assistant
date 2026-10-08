@@ -3,7 +3,7 @@
   "mcpServers": {
     "agshare": {
       "type": "streamable-http",
-      "url": "https://open-farm-assistant.vercel.app/api/agshare/mcp"
+      "url": "https://open-farm-assistant-git-feature-agshare-private-test-ofa3.vercel.app/api/agshare/mcp"
     }
   }
 }

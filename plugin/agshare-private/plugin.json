@@ -9,9 +9,9 @@
   "extensions": {
     "com.openai": {
       "interface": {
-        "displayName": "AgShare",
+        "displayName": "AgShare (test)",
         "shortDescription": "Skifter og AB-linjer",
-        "longDescription": "Privat AgShare-tilkobling med OFA-innlogging. Første utgave leser skifter, grenser og AB-linjer.",
+        "longDescription": "Privat AgShare-test med OFA-innlogging. Leser syntetiske skifter, grenser og AB-linjer fra et isolert testmiljø.",
         "developerName": "Open Farm Assistant",
         "category": "Productivity",
         "capabilities": [

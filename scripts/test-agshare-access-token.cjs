@@ -1,0 +1,14 @@
+const assert = require("node:assert/strict");
+const { issueAccessToken, verifyAccessToken } = require("../.agshare-test-build/oauth/access-token.js");
+process.env.AGSHARE_OAUTH_TOKEN_KEY = "a".repeat(64);
+const now = 1800000000, aud = "https://example.test/api/agshare/mcp", owner = "owner-123";
+const token = issueAccessToken(owner, aud, "read", now);
+assert.equal(verifyAccessToken(token, aud, owner, now)?.scope, "read");
+assert.equal(verifyAccessToken(token, aud, owner, now + 901), null);
+assert.equal(verifyAccessToken(token, aud + "/other", owner, now), null);
+assert.equal(verifyAccessToken(token, aud, "other-owner", now), null);
+assert.equal(verifyAccessToken(token.slice(0, -1) + (token.endsWith("A") ? "B" : "A"), aud, owner, now), null);
+assert.equal(verifyAccessToken("", aud, owner, now), null);
+assert.equal(verifyAccessToken("garbage", aud, owner, now), null);
+assert.equal(verifyAccessToken(issueAccessToken(owner, aud, "write", now), aud, owner, now)?.scope, "write");
+console.log("AgShare access-token tests passed");

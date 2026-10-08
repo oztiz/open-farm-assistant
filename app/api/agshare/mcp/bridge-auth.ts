@@ -20,16 +20,21 @@ export function authorizeBridgeToken(
     [env.AGSHARE_BRIDGE_READ_TOKEN, "read"],
   ];
   let scope: BridgeScope | null = null;
+  let matches = 0;
   for (const [secret, permission] of candidates) {
     if (!secret) continue;
     const expected = Buffer.from(`Bearer ${secret}`, "utf8");
     if (presented.length === expected.length && timingSafeEqual(presented, expected)) {
       scope = permission;
+      matches++;
     }
   }
-  return scope;
+  // Reject ambiguous configuration when the same token is assigned both scopes.
+  return matches === 1 ? scope : null;
 }
 
 export function bridgeScopeAllows(scope: BridgeScope, tool: string): boolean {
-  return scope === "write" || tool === "agshare_list_fields" || tool === "agshare_get_field";
+  const readTools = ["agshare_list_fields", "agshare_get_field"];
+  const writeTools = ["agshare_create_field", "agshare_update_field"];
+  return readTools.includes(tool) || (scope === "write" && writeTools.includes(tool));
 }

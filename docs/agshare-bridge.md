@@ -1,24 +1,47 @@
-# AgShare read-only bridge
+# AgShare bridge
 
-This branch adds `GET /api/agshare` (list owned fields) and
-`GET /api/agshare?id=<uuid>` (fetch one field including boundaries and AB lines).
+Private MCP JSON-RPC endpoint: `POST /api/agshare/mcp`. The original
+`GET /api/agshare` route remains read-only.
 
-## Vercel configuration
+## Server configuration
 
-Set these **server-only** environment variables in the Vercel project (never use `NEXT_PUBLIC_`):
-- `AGSHARE_API_KEY`: API key configured in AgOpenGPS AgShare settings.
-- `AGSHARE_BRIDGE_TOKEN`: separate, randomly generated long bearer token for callers of this bridge.
+`AGSHARE_API_KEY` is the AgShare account key. `AGSHARE_BRIDGE_TOKEN` is a
+separate bearer credential for trusted backend callers. Both are server-only
+Secret variables, scoped to Preview and `feature/agshare-readonly-bridge`.
+Never place them in browser JavaScript, Git, chat, or `NEXT_PUBLIC_*` variables.
 
-Calls must supply `Authorization: Bearer <AGSHARE_BRIDGE_TOKEN>`.
-The bridge sends `Authorization: ApiKey <AGSHARE_API_KEY>` to
-`https://agshare.agopengps.com`.
+The MCP endpoint supports list, get, create, update and delete tools.
+Get returns `structuredContent.revision`; update and delete require that
+revision and the exact current name. Ownership is checked against `/api/fields`.
+Omitted update properties are preserved. Supplied boundary or AB-line arrays
+replace the entire corresponding collection: retain all items that should remain.
+An empty AB-line array removes all AB lines. New fields default to private.
 
-Example request (use your secret manager; do not paste tokens in chat or commit them):
-`curl -H "Authorization: Bearer $AGSHARE_BRIDGE_TOKEN" https://<deployment>/api/agshare`
+Uploads follow AgOpenGPS's `UploadFieldDto`: `PUT /api/fields/{id}`, with
+name, origin, isPublic, boundary `{outer, holes}`, and abLines. Boundary arrays
+returned by GET map to the first outer ring and subsequent holes.
+Deletion uses the web client's `DELETE /web/isoxmlfields/{id}`. That route exists,
+but API-key authentication may not be accepted; errors are reported honestly.
+No bulk deletion is implemented.
 
-No writes, synchronization, Supabase mappings, or MCP tool registration are implemented yet.
-The route is not publicly usable without the bearer token, but the caller must still
-be a trusted backend: never put the bridge token into browser JavaScript.
-A production integration should add rate limiting, credential rotation, and an MCP
-server with OAuth suitable for ChatGPT before enabling interactive access.
-Do not deploy to production until authentication and error handling are tested.
+Writes are never retried automatically. If a write or its verification fails,
+read the returned field ID before retrying: the write may already have completed.
+The revision is a preflight guard, not an atomic server-side compare-and-swap;
+an AgOpenGPS upload can still race between the check and PUT. Coordinate
+validation checks ranges and basic shapes, not survey accuracy or polygon topology.
+The snapshot hash is not a backup. OAuth and native ChatGPT connector registration
+are separate work; this bearer endpoint is for trusted backend calls.
+
+## Validation
+
+From the repository root:
+
+```sh
+npx tsc --noEmit
+npx eslint app/api/agshare/mcp
+npx tsc app/api/agshare/mcp/client.ts app/api/agshare/mcp/route.ts --outDir /tmp/ofa-agshare-compiled --module commonjs --target es2022 --esModuleInterop --skipLibCheck
+NODE_PATH="$PWD/node_modules" node --test scripts/test-agshare.cjs
+```
+
+The tests use mock data and cover authentication, ownership, name/revision guards,
+invalid coordinates, preservation of geometry and AB lines, and write/readback.

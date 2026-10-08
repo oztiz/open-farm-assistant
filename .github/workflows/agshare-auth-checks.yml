@@ -1,0 +1,24 @@
+name: AgShare authorization checks
+on:
+  push:
+    branches: [feature/agshare-oauth]
+  pull_request:
+    paths:
+      - 'app/api/agshare/**'
+      - 'scripts/test-agshare-bridge-auth.cjs'
+      - 'package.json'
+      - '.github/workflows/agshare-auth-checks.yml'
+permissions:
+  contents: read
+jobs:
+  bridge-auth:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run test:agshare:bridge
+      - run: npm run build

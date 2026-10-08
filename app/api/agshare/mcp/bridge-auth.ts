@@ -9,10 +9,7 @@ export type BridgeScope = "read" | "write";
  */
 export function authorizeBridgeToken(
   authorization: string | null,
-  env: {
-    AGSHARE_BRIDGE_TOKEN?: string;
-    AGSHARE_BRIDGE_READ_TOKEN?: string;
-  } = process.env,
+  env: Record<string, string | undefined> = process.env,
 ): BridgeScope | null {
   const presented = Buffer.from(authorization ?? "", "utf8");
   const candidates: Array<[string | undefined, BridgeScope]> = [

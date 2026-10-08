@@ -2,8 +2,8 @@
 import { useEffect, useState } from "react";
 import { createClient, type OAuthAuthorizationDetails } from "@supabase/supabase-js";
 
-type Props = { authorizationId: string; owner: string; clientId: string; callback: string };
-export default function Consent({ authorizationId, owner, clientId, callback }: Props) {
+type Props = { authorizationId: string; owner: string; clientId: string; callback: string; testMode: boolean };
+export default function Consent({ authorizationId, owner, clientId, callback, testMode }: Props) {
   const [details, setDetails] = useState<OAuthAuthorizationDetails | null>(null);
   const [message, setMessage] = useState("Kontrollerer innloggingen …");
   const [busy, setBusy] = useState(false);
@@ -58,9 +58,10 @@ export default function Consent({ authorizationId, owner, clientId, callback }: 
   }
   return <main className="mx-auto max-w-xl p-8">
     <h1 className="text-2xl font-semibold">Koble AgShare til ChatGPT</h1>
+    {testMode && <p className="mt-4 font-semibold">Testmiljø: bare syntetiske skifter og AB-linjer.</p>}
     <p className="mt-4">ChatGPT kan lese skiftene, grensene og AB-linjene i AgShare-kontoen din. Denne tilkoblingen gir ikke tilgang til å endre AgShare-data eller lese OFA-databasen.</p>
     {message && <p role="status" className="mt-4">{message}</p>}
-    {!details && <p className="mt-4"><a href="/" target="_blank" rel="noopener noreferrer">Åpne OFA for å logge inn</a>. Gå deretter tilbake hit og last siden på nytt.</p>}
+    {!details && <p className="mt-4"><a href="/" target="_blank" rel="noopener noreferrer">{testMode ? "Åpne OFA-test for å logge inn" : "Åpne OFA for å logge inn"}</a>. Gå deretter tilbake hit og last siden på nytt.</p>}
     {details && <div className="mt-6">
       <p>Forespørsel fra: {details.client.name}</p>
       <p>Identitetstillatelser: {details.scope || "Ingen ekstra profilopplysninger"}</p>

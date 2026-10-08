@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { UUID, Field, ownedField, requestAgShare, revision, uploadPayload, UpstreamError } from "./client";
+import { oauthConfig, oauthChallenge, verifyOAuthToken } from "./oauth-auth";
+import { testFixturesEnabled } from "./test-fixture";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -24,11 +26,22 @@ function err(id: Rpc["id"], code: number, message: string) { return NextResponse
 function result(id: Rpc["id"], data: unknown, extra = {}) { return rpc(id, { content: [{ type: "text", text: JSON.stringify(data) }], structuredContent: { data, ...extra } }); }
 export async function POST(req: NextRequest) {
   const token = process.env.AGSHARE_BRIDGE_TOKEN;
-  const key = process.env.AGSHARE_API_KEY;
-  if (!token || !key) return NextResponse.json({ error: "Not configured" }, { status: 503 });
+  const key = testFixturesEnabled() ? "test-fixtures-only" : process.env.AGSHARE_API_KEY;
+  const config = oauthConfig();
+  if (!key || (!token && !config)) return NextResponse.json({ error: "Not configured" }, { status: 503 });
+  const origin = req.headers.get("origin");
+  if (origin && (!config || origin !== new URL(config.resource).origin)) {
+    return NextResponse.json({ error: "Forbidden origin" }, { status: 403 });
+  }
   const supplied = Buffer.from(req.headers.get("authorization") ?? "");
   const expected = Buffer.from(`Bearer ${token}`);
-  if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  let scope: "read" | "write" | null = token && supplied.length === expected.length && timingSafeEqual(supplied, expected) ? "write" : null;
+  if (!scope && config) {
+    const authorization = req.headers.get("authorization") ?? "";
+    if (authorization.startsWith("Bearer ")) scope = await verifyOAuthToken(authorization.slice(7), config);
+  }
+  if (!scope) return NextResponse.json({ error: "Unauthorized" }, { status: 401,
+    headers: config ? oauthChallenge(config) : { "Cache-Control": "no-store" } });
   let body: Rpc;
   try { const raw = await req.text(); if (Buffer.byteLength(raw) > 2000000) return err(null, -32600, "Request too large"); body = JSON.parse(raw); }
   catch { return err(null, -32700, "Parse error"); }
@@ -36,13 +49,14 @@ export async function POST(req: NextRequest) {
   if (body.id === undefined) return new NextResponse(null, { status: 202 });
   if (body.method === "initialize") return rpc(body.id, { protocolVersion: "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "ofa-agshare", version: "0.2.0" } });
   if (body.method === "ping") return rpc(body.id, {});
-  if (body.method === "tools/list") return rpc(body.id, { tools: TOOLS });
+  if (body.method === "tools/list") return rpc(body.id, { tools: TOOLS.filter(t => scope === "write" || t.annotations.readOnlyHint) });
   if (body.method !== "tools/call") return err(body.id, -32601, "Method not found");
   const name = body.params?.name;
   const args = body.params?.arguments ?? {};
   if (!args || typeof args !== "object" || Array.isArray(args)) return err(body.id, -32602, "Invalid arguments");
   const tool = TOOLS.find(t => t.name === name);
   if (!tool || Object.keys(args).some(k => !(k in tool.inputSchema.properties))) return err(body.id, -32602, "Invalid tool name or arguments");
+  if (scope !== "write" && !tool.annotations.readOnlyHint) return NextResponse.json({ error: "Forbidden" }, { status: 403, headers: { "Cache-Control": "no-store" } });
   let wrote = false;
   let writtenId: string | undefined;
   try {

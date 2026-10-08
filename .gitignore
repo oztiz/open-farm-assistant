@@ -12,6 +12,7 @@
 
 # testing
 /coverage
+/.agshare-test-build/
 
 # next.js
 /.next/

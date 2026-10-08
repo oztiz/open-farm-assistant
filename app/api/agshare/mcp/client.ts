@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { testFixturesEnabled, testResponse } from "./test-fixture";
 
 export type Coord = { latitude: number; longitude: number };
 export type Track = { name: string; type: string; coords: Coord[] };
@@ -7,6 +8,7 @@ export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{1
 export class UpstreamError extends Error { constructor(public status: number) { super(`AgShare returned HTTP ${status}`); } }
 export function revision(field: Field) { return createHash("sha256").update(JSON.stringify(field)).digest("hex"); }
 export async function requestAgShare(path: string, key: string, method = "GET", body?: unknown): Promise<unknown> {
+  if (testFixturesEnabled()) return testResponse(path, method);
   const response = await fetch(`https://agshare.agopengps.com${path}`, {
     method, headers: { Accept: "application/json", Authorization: `ApiKey ${key}`, ...(body ? { "Content-Type": "application/json" } : {}) },
     ...(body ? { body: JSON.stringify(body) } : {}), cache: "no-store", signal: AbortSignal.timeout(10000), redirect: "error",

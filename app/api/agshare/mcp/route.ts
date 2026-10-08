@@ -18,7 +18,6 @@ const TOOLS = [
   { name: "agshare_get_field", description: "Read field boundaries and AB lines, plus a revision for guarded edits.", inputSchema: { type: "object", properties: { field_id: identity.field_id }, required: ["field_id"], additionalProperties: false }, annotations: { readOnlyHint: true } },
   { name: "agshare_create_field", description: "Create a new private field with a new ID. Returns the new ID. Never retries writes automatically.", inputSchema: { type: "object", properties, required: ["name", "origin", "boundaries", "ab_lines"], additionalProperties: false }, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false } },
   { name: "agshare_update_field", description: "Update an owned field. Read it first and supply expected revision and name. Omitted properties are preserved. Supplied AB-line and boundary arrays replace those entire arrays; retain every item that should remain.", inputSchema: { type: "object", properties: { ...identity, ...properties }, required: ["field_id", "expected_revision", "expected_name"], additionalProperties: false }, annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false } },
-  { name: "agshare_delete_field", description: "Permanently delete one owned field using AgShare's web deletion endpoint. Requires the exact name and revision from a fresh read. May require web authentication that an API key cannot provide.", inputSchema: { type: "object", properties: identity, required: ["field_id", "expected_revision", "expected_name"], additionalProperties: false }, annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false } },
 ];
 function rpc(id: Rpc["id"], result: unknown) { return NextResponse.json({ jsonrpc: "2.0", id: id ?? null, result }, { headers: { "Cache-Control": "no-store" } }); }
 function err(id: Rpc["id"], code: number, message: string) { return NextResponse.json({ jsonrpc: "2.0", id: id ?? null, error: { code, message } }, { headers: { "Cache-Control": "no-store" } }); }
@@ -61,13 +60,6 @@ export async function POST(req: NextRequest) {
     const current = await ownedField(id, key);
     if (name === "agshare_get_field") return result(body.id, current, { revision: revision(current) });
     if (args.expected_name !== current.name || args.expected_revision !== revision(current)) return err(body.id, -32602, "Field changed or confirmation does not match; read the field again");
-    if (name === "agshare_delete_field") {
-      wrote = true; writtenId = id;
-      await requestAgShare(`/web/isoxmlfields/${id}`, key, "DELETE");
-      const fields = await requestAgShare("/api/fields", key) as { id: string }[];
-      if (fields.some(f => f.id.toLowerCase() === id.toLowerCase())) throw new Error("Deletion not verified");
-      return result(body.id, { deleted: true, field_id: id, name: current.name });
-    }
     const payload = uploadPayload(args, current);
     wrote = true; writtenId = id;
     await requestAgShare(`/api/fields/${id}`, key, "PUT", payload);

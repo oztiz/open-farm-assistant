@@ -7,11 +7,11 @@ Private MCP JSON-RPC endpoint: `POST /api/agshare/mcp`. The original
 
 `AGSHARE_API_KEY` is the AgShare account key. `AGSHARE_BRIDGE_TOKEN` is a
 separate bearer credential for trusted backend callers. Both are server-only
-Secret variables, scoped to Preview and `feature/agshare-readonly-bridge`.
+Secret variables. Production uses its own bridge token; the account API key is scoped to Production.
 Never place them in browser JavaScript, Git, chat, or `NEXT_PUBLIC_*` variables.
 
-The MCP endpoint supports list, get, create, update and delete tools.
-Get returns `structuredContent.revision`; update and delete require that
+The MCP endpoint supports list, get, create and update tools.
+Get returns `structuredContent.revision`; updates require that
 revision and the exact current name. Ownership is checked against `/api/fields`.
 Omitted update properties are preserved. Supplied boundary or AB-line arrays
 replace the entire corresponding collection: retain all items that should remain.
@@ -20,9 +20,10 @@ An empty AB-line array removes all AB lines. New fields default to private.
 Uploads follow AgOpenGPS's `UploadFieldDto`: `PUT /api/fields/{id}`, with
 name, origin, isPublic, boundary `{outer, holes}`, and abLines. Boundary arrays
 returned by GET map to the first outer ring and subsequent holes.
-Deletion uses the web client's `DELETE /web/isoxmlfields/{id}`. That route exists,
-but API-key authentication may not be accepted; errors are reported honestly.
-No bulk deletion is implemented.
+Whole-field deletion is deliberately unavailable in the bridge. The live test of
+AgShare's web deletion endpoint returned HTTP 401 for API-key authentication.
+The user deletes whole fields on the signed-in AgShare website. AB lines can be
+removed by updating the field's AB-line array while preserving its boundaries.
 
 Writes are never retried automatically. If a write or its verification fails,
 read the returned field ID before retrying: the write may already have completed.

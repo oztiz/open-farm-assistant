@@ -1,6 +1,6 @@
-// Run: npx tsc app/api/agshare/mcp/bridge-auth.ts --target es2022 --module commonjs --skipLibCheck --outDir /tmp/ofa-bridge-test && node scripts/test-agshare-bridge-auth.cjs
+// Run: npm run test:agshare:bridge
 const assert = require("node:assert/strict");
-const { authorizeBridgeToken, bridgeScopeAllows } = require("/tmp/ofa-bridge-test/bridge-auth.js");
+const { authorizeBridgeToken, bridgeScopeAllows } = require("../.agshare-test-build/bridge-auth.js");
 const env = { AGSHARE_BRIDGE_TOKEN: "write-secret", AGSHARE_BRIDGE_READ_TOKEN: "read-secret" };
 assert.equal(authorizeBridgeToken("Bearer read-secret", env), "read");
 assert.equal(authorizeBridgeToken("Bearer write-secret", env), "write");

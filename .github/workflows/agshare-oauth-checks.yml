@@ -1,0 +1,25 @@
+name: AgShare OAuth checks
+on:
+  pull_request:
+    paths:
+      - "app/api/agshare/**"
+      - "app/agshare/**"
+      - "app/.well-known/**"
+      - "scripts/test-agshare-oauth.cjs"
+      - "package*.json"
+      - ".github/workflows/agshare-oauth-checks.yml"
+permissions:
+  contents: read
+jobs:
+  oauth:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - run: npm run test:agshare:oauth
+      - run: npx eslint app/agshare/connect app/api/agshare/mcp/oauth-auth.ts app/api/agshare/mcp/route.ts app/.well-known/oauth-protected-resource/route.ts
+      - run: npm run build

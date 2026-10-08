@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test:agshare:bridge": "tsc app/api/agshare/mcp/bridge-auth.ts --target es2022 --module commonjs --skipLibCheck --types node --outDir .agshare-test-build && node scripts/test-agshare-bridge-auth.cjs"
   },
   "dependencies": {
     "next": "16.2.4",

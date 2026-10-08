@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
 import { authorizeBridgeToken, bridgeScopeAllows } from "./bridge-auth";
+import { verifyAccessToken } from "../oauth/access-token";
 import { UUID, Field, ownedField, requestAgShare, revision, uploadPayload, UpstreamError } from "./client";
 
 export const runtime = "nodejs";
@@ -26,7 +27,16 @@ function result(id: Rpc["id"], data: unknown, extra = {}) { return rpc(id, { con
 export async function POST(req: NextRequest) {
   const key = process.env.AGSHARE_API_KEY;
   if (!key || (!process.env.AGSHARE_BRIDGE_TOKEN && !process.env.AGSHARE_BRIDGE_READ_TOKEN)) return NextResponse.json({ error: "Not configured" }, { status: 503 });
-  const scope = authorizeBridgeToken(req.headers.get("authorization"));
+  let scope = authorizeBridgeToken(req.headers.get("authorization"));
+  // OAuth tokens are accepted only when explicitly configured for this resource and owner.
+  if (!scope && process.env.AGSHARE_OAUTH_PUBLIC_ORIGIN && process.env.AGSHARE_OAUTH_OWNER_USER_ID) {
+    const authorization = req.headers.get("authorization") ?? "";
+    if (authorization.startsWith("Bearer ")) {
+      const audience = new URL("/api/agshare/mcp", process.env.AGSHARE_OAUTH_PUBLIC_ORIGIN).toString();
+      const claims = verifyAccessToken(authorization.slice(7), audience, process.env.AGSHARE_OAUTH_OWNER_USER_ID);
+      scope = claims?.scope ?? null;
+    }
+  }
   if (!scope) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   let body: Rpc;
   try { const raw = await req.text(); if (Buffer.byteLength(raw) > 2000000) return err(null, -32600, "Request too large"); body = JSON.parse(raw); }

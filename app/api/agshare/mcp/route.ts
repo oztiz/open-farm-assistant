@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { UUID, Field, ownedField, requestAgShare, revision, uploadPayload, UpstreamError } from "./client";
 import { oauthConfig, oauthChallenge, verifyOAuthToken } from "./oauth-auth";
-import { testFixturesEnabled } from "./test-fixture";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -26,7 +25,7 @@ function err(id: Rpc["id"], code: number, message: string) { return NextResponse
 function result(id: Rpc["id"], data: unknown, extra = {}) { return rpc(id, { content: [{ type: "text", text: JSON.stringify(data) }], structuredContent: { data, ...extra } }); }
 export async function POST(req: NextRequest) {
   const token = process.env.AGSHARE_BRIDGE_TOKEN;
-  const key = testFixturesEnabled() ? "test-fixtures-only" : process.env.AGSHARE_API_KEY;
+  const key = process.env.AGSHARE_API_KEY;
   const config = oauthConfig();
   if (!key || (!token && !config)) return NextResponse.json({ error: "Not configured" }, { status: 503 });
   const origin = req.headers.get("origin");

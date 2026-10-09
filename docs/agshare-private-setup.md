@@ -10,7 +10,11 @@ Supabase uses the OFA site URL and `/agshare/connect` for authorization. Registe
 
 Tokens require the exact owner, client and MCP audience, role `agshare_mcp`, capability `agshare_access=read`, and at most 900 seconds of lifetime. The isolated role must have no table privileges or membership for authenticator. Never authorize from user-editable metadata. The consent page accepts only the configured AgShare client; older OAuth clients cannot start new sessions through it.
 
-OAuth exposes only `agshare_list_fields` and `agshare_get_field`. Existing bridge credentials retain their separate behavior. There is no synthetic-data switch or bundled test plugin in production.
+OAuth exposes `agshare_list_fields` and `agshare_get_field`. To enable updating existing fields, the server must set `AGSHARE_OAUTH_ALLOW_UPDATE=true` and the server-controlled token hook must issue `agshare_access=update` for this exact client after the owner has approved the expanded permission. Both are required. Old `read` tokens stay read-only. The isolated database role, owner/client/audience validation and 15-minute lifetime are unchanged.
+
+Update access additionally exposes `agshare_update_field`; it never exposes create or whole-field delete. Read the field first and supply its `expected_revision` and `expected_name`. Omitted properties are preserved, but supplied boundary and AB-line arrays replace those entire arrays. Retain every unchanged item. The server reads back the saved content and does not report success when it differs. Writes are never retried automatically. AgShare provides no atomic conditional write here, so a concurrent change between the revision check and PUT remains possible.
+
+Update the existing ChatGPT plugin's tools after deployment and set its permission mode to ask before writes. The consent page displays reading and updating when the server flag is enabled. Reconnect to obtain a new token and confirm the updated permissions. The existing bridge keeps its separate behavior; there is no synthetic-data switch or bundled test plugin in production.
 
 ## Validation and recovery
 

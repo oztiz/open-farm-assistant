@@ -10,5 +10,5 @@ export default async function ConnectPage({ searchParams }: { searchParams: Prom
   if (!config || !config.client || !callback || typeof id !== "string" || !/^[a-zA-Z0-9_-]{1,200}$/.test(id)) {
     return <main><h1>AgShare</h1><p>Innloggingen er ikke klargjort, eller forespørselen er ugyldig.</p></main>;
   }
-  return <Consent authorizationId={id} owner={config.owner} clientId={config.client} callback={callback} />;
+  return <Consent authorizationId={id} owner={config.owner} clientId={config.client} callback={callback} allowUpdate={config.allowUpdate} />;
 }

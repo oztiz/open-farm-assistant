@@ -1,6 +1,6 @@
 import { createRemoteJWKSet, jwtVerify, type JWTVerifyGetKey } from "jose";
 
-export type OAuthConfig = { issuer: string; resource: string; metadata: string; owner: string; client: string };
+export type OAuthConfig = { issuer: string; resource: string; metadata: string; owner: string; client: string; allowUpdate: boolean };
 export function oauthConfig(env: NodeJS.ProcessEnv = process.env): OAuthConfig | null {
   if (env.AGSHARE_OAUTH_ENABLED !== "true") return null;
   const { NEXT_PUBLIC_SUPABASE_URL: base, AGSHARE_OAUTH_PUBLIC_ORIGIN: origin,
@@ -10,7 +10,7 @@ export function oauthConfig(env: NodeJS.ProcessEnv = process.env): OAuthConfig |
     const auth = new URL(base), site = new URL(origin);
     if ([auth, site].some(u => u.protocol !== "https:" || u.username || u.password || u.search || u.hash || u.pathname !== "/")) return null;
     return { issuer: new URL("/auth/v1", auth).href, resource: new URL("/api/agshare/mcp", site).href,
-      metadata: new URL("/.well-known/oauth-protected-resource", site).href, owner, client: client ?? "" };
+      metadata: new URL("/.well-known/oauth-protected-resource", site).href, owner, client: client ?? "", allowUpdate: env.AGSHARE_OAUTH_ALLOW_UPDATE === "true" };
   } catch { return null; }
 }
 const keys = new Map<string, JWTVerifyGetKey>();
@@ -22,7 +22,7 @@ function signingKeys(issuer: string): JWTVerifyGetKey {
   }
   return key;
 }
-export async function verifyOAuthToken(token: string, config: OAuthConfig, key?: JWTVerifyGetKey): Promise<"read" | null> {
+export async function verifyOAuthToken(token: string, config: OAuthConfig, key?: JWTVerifyGetKey): Promise<"read" | "update" | null> {
   try {
     if (!config.client || !token || token.length > 16384) return null;
     const { payload } = await jwtVerify(token, key ?? signingKeys(config.issuer), {
@@ -32,10 +32,10 @@ export async function verifyOAuthToken(token: string, config: OAuthConfig, key?:
     });
     // Signed, server-controlled claims only. Never use user_metadata for authorization.
     if (payload.sub !== config.owner || payload.client_id !== config.client ||
-        payload.role !== "agshare_mcp" || payload.agshare_access !== "read" ||
+        payload.role !== "agshare_mcp" || !["read", "update"].includes(String(payload.agshare_access)) ||
         typeof payload.iat !== "number" || typeof payload.exp !== "number" ||
         payload.exp <= payload.iat || payload.exp - payload.iat > 900) return null;
-    return "read";
+    return payload.agshare_access === "update" && config.allowUpdate ? "update" : "read";
   } catch { return null; }
 }
 export function oauthChallenge(config: OAuthConfig) {

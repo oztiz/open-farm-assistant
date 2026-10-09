@@ -34,7 +34,7 @@ export async function POST(req: NextRequest) {
   }
   const supplied = Buffer.from(req.headers.get("authorization") ?? "");
   const expected = Buffer.from(`Bearer ${token}`);
-  let scope: "read" | "write" | null = token && supplied.length === expected.length && timingSafeEqual(supplied, expected) ? "write" : null;
+  let scope: "read" | "update" | "write" | null = token && supplied.length === expected.length && timingSafeEqual(supplied, expected) ? "write" : null;
   if (!scope && config) {
     const authorization = req.headers.get("authorization") ?? "";
     if (authorization.startsWith("Bearer ")) scope = await verifyOAuthToken(authorization.slice(7), config);
@@ -48,14 +48,14 @@ export async function POST(req: NextRequest) {
   if (body.id === undefined) return new NextResponse(null, { status: 202 });
   if (body.method === "initialize") return rpc(body.id, { protocolVersion: "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "ofa-agshare", version: "0.2.0" } });
   if (body.method === "ping") return rpc(body.id, {});
-  if (body.method === "tools/list") return rpc(body.id, { tools: TOOLS.filter(t => scope === "write" || t.annotations.readOnlyHint) });
+  if (body.method === "tools/list") return rpc(body.id, { tools: TOOLS.filter(t => scope === "write" || t.annotations.readOnlyHint || (scope === "update" && t.name === "agshare_update_field")) });
   if (body.method !== "tools/call") return err(body.id, -32601, "Method not found");
   const name = body.params?.name;
   const args = body.params?.arguments ?? {};
   if (!args || typeof args !== "object" || Array.isArray(args)) return err(body.id, -32602, "Invalid arguments");
   const tool = TOOLS.find(t => t.name === name);
   if (!tool || Object.keys(args).some(k => !(k in tool.inputSchema.properties))) return err(body.id, -32602, "Invalid tool name or arguments");
-  if (scope !== "write" && !tool.annotations.readOnlyHint) return NextResponse.json({ error: "Forbidden" }, { status: 403, headers: { "Cache-Control": "no-store" } });
+  if (!tool.annotations.readOnlyHint && scope !== "write" && !(scope === "update" && name === "agshare_update_field")) return NextResponse.json({ error: "Forbidden" }, { status: 403, headers: { "Cache-Control": "no-store" } });
   let wrote = false;
   let writtenId: string | undefined;
   try {
@@ -77,6 +77,9 @@ export async function POST(req: NextRequest) {
     wrote = true; writtenId = id;
     await requestAgShare(`/api/fields/${id}`, key, "PUT", payload);
     const data = await requestAgShare(`/api/fields/${id}`, key) as Field;
+    if (data.id !== id || JSON.stringify(uploadPayload({}, data)) !== JSON.stringify(payload)) {
+      return rpc(body.id, { isError: true, content: [{ type: "text", text: `A write was attempted for ${id}, but read-back does not match the requested content. Read its state before retrying.` }], structuredContent: { data, updated: false, revision: revision(data) } });
+    }
     return result(body.id, data, { revision: revision(data), updated: true });
   } catch (error) {
     const message = error instanceof UpstreamError ? error.message : !wrote && error instanceof Error ? error.message : "AgShare request failed";

@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test:agshare:oauth": "tsc app/api/agshare/mcp/route.ts app/.well-known/oauth-protected-resource/route.ts --target es2022 --module commonjs --skipLibCheck --types node --outDir .agshare-test-build && node --test scripts/test-agshare-oauth.cjs"
+    "test:agshare:oauth": "tsc app/api/agshare/mcp/route.ts app/.well-known/oauth-protected-resource/route.ts --target es2022 --module commonjs --skipLibCheck --types node --outDir .agshare-test-build && node --test scripts/test-agshare-oauth.cjs",
+    "test:plantevernjournal": "tsc lib/plantevernjournal/mapper.ts lib/plantevernjournal/client.ts --target es2022 --module commonjs --skipLibCheck --types node --outDir .plantevernjournal-test-build && node --test scripts/test-plantevernjournal.cjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.117.3",
